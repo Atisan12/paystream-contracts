@@ -811,6 +811,30 @@ status == Exhausted  → claimable = 0
 
 ---
 
+### `claimable_batch`
+
+Query claimable amounts for up to 50 streams in one contract call. Missing stream IDs return 0; all other results use the same calculation as `claimable` and preserve input order.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `stream_ids` | `Vec<u64>` | Stream IDs to query (maximum 50) |
+
+**Returns:** `Vec<i128>` — claimable amounts in the same order as `stream_ids`
+
+**Errors:**
+- Panics if `stream_ids` has more than 50 entries
+- E004 if claimable amount arithmetic overflows
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- claimable_batch --stream_ids '[1, 2, 3]'
+```
+
+---
+
 ### `claimable_at`
 
 Query how many tokens would be claimable at an arbitrary timestamp.
@@ -891,6 +915,29 @@ stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
 
 ---
 
+### `streams_by_employee_paginated`
+
+Return a page of stream IDs paying an employee, in creation order. The requested limit is capped at 50; an offset at or beyond the total stream count returns an empty vector.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employee` | `Address` | Employee address to query |
+| `offset` | `u32` | Number of stream IDs to skip |
+| `limit` | `u32` | Maximum number of IDs to return (capped at 50) |
+
+**Returns:** `Vec<u64>` — stream ID page
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- streams_by_employee_paginated \
+  --employee <EMPLOYEE_ADDRESS> --offset 0 --limit 20
+```
+
+---
+
 ### `stream_count_by_employer`
 
 Return the number of streams owned by an employer. Equivalent to `streams_by_employer(employer).len()` but avoids loading the full ID vector — useful for pagination and dashboards.
@@ -927,6 +974,26 @@ Return the number of streams paying an employee. Equivalent to `streams_by_emplo
 ```bash
 stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
   -- stream_count_by_employee --employee <EMPLOYEE_ADDRESS>
+```
+
+---
+
+### `stream_count_by_token`
+
+Return the number of streams funded with a token. The count is maintained in an on-chain token index, so callers do not need to scan all streams.
+
+**Caller:** Anyone
+
+| Parameter | Type | Description |
+|---|---|---|
+| `token` | `Address` | Token contract address to query |
+
+**Returns:** `u64` — stream count; 0 if no streams use the token
+
+**Example:**
+```bash
+stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
+  -- stream_count_by_token --token <TOKEN_ADDRESS>
 ```
 
 ---

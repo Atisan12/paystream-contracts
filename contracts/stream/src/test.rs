@@ -106,6 +106,88 @@ fn test_claimable_increases_with_time() {
 }
 
 #[test]
+fn test_claimable_batch_mixed_statuses_preserves_order() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let active_employee = Address::generate(&env);
+    let paused_employee = Address::generate(&env);
+    let exhausted_employee = Address::generate(&env);
+    let cancelled_employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    let active_id = client.create_stream(
+        &employer,
+        &active_employee,
+        &token_id,
+        &10_000,
+        &10,
+        &0,
+        &None,
+    );
+    let paused_id = client.create_stream(
+        &employer,
+        &paused_employee,
+        &token_id,
+        &10_000,
+        &10,
+        &0,
+        &None,
+    );
+    let exhausted_id = client.create_stream(
+        &employer,
+        &exhausted_employee,
+        &token_id,
+        &500,
+        &10,
+        &0,
+        &None,
+    );
+    let cancelled_id = client.create_stream(
+        &employer,
+        &cancelled_employee,
+        &token_id,
+        &10_000,
+        &10,
+        &0,
+        &None,
+    );
+
+    client.pause_stream(&employer, &paused_id);
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&exhausted_employee, &exhausted_id);
+    client.cancel_stream(&employer, &cancelled_id);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(cancelled_id);
+    ids.push_back(paused_id);
+    ids.push_back(999);
+    ids.push_back(active_id);
+    ids.push_back(exhausted_id);
+
+    let amounts = client.claimable_batch(&ids);
+    assert_eq!(amounts.len(), 5);
+    assert_eq!(amounts.get(0).unwrap(), 0);
+    assert_eq!(amounts.get(1).unwrap(), 1000);
+    assert_eq!(amounts.get(2).unwrap(), 0);
+    assert_eq!(amounts.get(3).unwrap(), 1000);
+    assert_eq!(amounts.get(4).unwrap(), 0);
+}
+
+#[test]
+#[should_panic(expected = "stream_ids length exceeds 50")]
+fn test_claimable_batch_rejects_more_than_50_stream_ids() {
+    let (env, client) = setup();
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for id in 0..51 {
+        ids.push_back(id);
+    }
+    client.claimable_batch(&ids);
+}
+
+#[test]
 fn test_withdraw() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
@@ -1575,6 +1657,111 @@ fn test_stream_count_by_employee_matches_list_length() {
     let list_len = client.streams_by_employee(&employee).len() as u64;
     assert_eq!(count, list_len);
     assert_eq!(count, 2);
+}
+
+#[test]
+fn test_streams_by_employee_paginated_pages_and_bounds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    for _ in 0..4 {
+        client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+    }
+
+    let first_page = client.streams_by_employee_paginated(&employee, &0, &2);
+    assert_eq!(first_page.len(), 2);
+    assert_eq!(first_page.get(0).unwrap(), 1);
+    assert_eq!(first_page.get(1).unwrap(), 2);
+
+    let last_page = client.streams_by_employee_paginated(&employee, &3, &2);
+    assert_eq!(last_page.len(), 1);
+    assert_eq!(last_page.get(0).unwrap(), 4);
+
+    let beyond_end = client.streams_by_employee_paginated(&employee, &5, &2);
+    assert!(beyond_end.is_empty());
+}
+
+#[test]
+fn test_streams_by_employee_paginated_caps_limit_at_50() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    for _ in 0..51 {
+        client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+    }
+
+    let page = client.streams_by_employee_paginated(&employee, &0, &100);
+    assert_eq!(page.len(), 50);
+    assert_eq!(page.get(49).unwrap(), 50);
+}
+
+/// stream_count_by_token returns 0 for a token with no streams.
+#[test]
+fn test_stream_count_by_token_unknown_token_returns_zero() {
+    let (env, client) = setup();
+    let token = Address::generate(&env);
+    assert_eq!(client.stream_count_by_token(&token), 0);
+}
+
+/// stream_count_by_token includes streams created through create_stream.
+#[test]
+fn test_stream_count_by_token_single_stream() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    assert_eq!(client.stream_count_by_token(&token_id), 1);
+}
+
+/// Token indexes include single and batch-created streams without mixing tokens.
+#[test]
+fn test_stream_count_by_token_multiple_tokens_and_batch() {
+    use crate::types::StreamParams;
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let employee3 = Address::generate(&env);
+    let token_a = setup_token(&env, &employer);
+    let token_b = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.create_stream(&employer, &employee1, &token_a, &10_000, &10, &0, &None);
+
+    let mut params = soroban_sdk::Vec::new(&env);
+    params.push_back(StreamParams {
+        employee: employee2,
+        token: token_a.clone(),
+        deposit: 10_000,
+        rate_per_second: 10,
+        stop_time: 0,
+    });
+    params.push_back(StreamParams {
+        employee: employee3,
+        token: token_b.clone(),
+        deposit: 10_000,
+        rate_per_second: 10,
+        stop_time: 0,
+    });
+    client.create_streams_batch(&employer, &params);
+
+    assert_eq!(client.stream_count_by_token(&token_a), 2);
+    assert_eq!(client.stream_count_by_token(&token_b), 1);
 }
 
 // ---------------------------------------------------------------------------

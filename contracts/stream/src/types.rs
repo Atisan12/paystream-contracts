@@ -99,6 +99,8 @@ pub enum DataKey {
     /// Time-based index: day-bucket (unix_timestamp / 86400) → Vec<u64> of stream IDs
     /// created within that day. Enables efficient time-range queries without a full scan.
     StreamsByTimestamp(u64),
+    /// Index: token address → Vec<u64> of streams funded with that token.
+    TokenStreams(Address),
 }
 
 /// Contract error codes – panic messages reference these names so callers can

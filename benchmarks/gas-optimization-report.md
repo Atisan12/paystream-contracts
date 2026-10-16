@@ -71,6 +71,19 @@ stellar contract invoke \
 
 Measurements averaged over 10 runs on identical ledger state (stream with 10,000 deposit, 10 rate/s, 200s elapsed).
 
+## `claimable_batch` — one call vs. N `claimable` calls (SC-28)
+
+`claimable_batch` accepts up to 50 IDs and returns values in input order. It reduces client-to-contract invocations to one, but still loads each existing stream from persistent storage. The comparison below separates measured scalar cost from the call-count benefit; batch CPU cost has not been measured independently.
+
+The scalar reference is the measured `claimable` result above: approximately 701,300 CPU instructions per invocation. Multiplying that figure by N is a linear projection for separate calls, not a measurement of `claimable_batch`.
+
+| Streams | Separate `claimable` calls | Projected scalar CPU | `claimable_batch` calls | Batch stream reads |
+|---:|---:|---:|---:|---:|
+| 10 | 10 | ~7,013,000 | 1 | Up to 10 |
+| 50 | 50 | ~35,065,000 | 1 | Up to 50 |
+
+The batch API therefore reduces contract/RPC round trips by 90% for 10 streams and 98% for 50 streams. It does not remove the per-stream storage reads or claimable arithmetic, so CPU savings depend on invocation overhead and should be confirmed with `stellar contract invoke --cost` for the target network/runtime.
+
 ---
 
 ## Residual Opportunities (not applied — diminishing returns)

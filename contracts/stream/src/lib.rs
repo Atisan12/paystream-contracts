@@ -294,6 +294,7 @@ impl StreamContract {
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
         index_employee_stream(&env, &employee, id);
+        index_token_stream(&env, &stream.token, id);
         index_stream_by_timestamp(&env, now, id);
         events::stream_created(&env, id, &employer, &employee, rate_per_second);
         id
@@ -414,6 +415,7 @@ impl StreamContract {
             save_stream(&env, &stream);
             index_employer_stream(&env, &employer, id);
             index_employee_stream(&env, &p.employee, id);
+            index_token_stream(&env, &p.token, id);
             index_stream_by_timestamp(&env, now, id);
             events::stream_created(&env, id, &employer, &p.employee, p.rate_per_second);
             ids.push_back(id);
@@ -1096,7 +1098,7 @@ impl StreamContract {
         events::stream_transferred(&env, stream_id, &employer, &new_employer);
     }
 
-    /// Settle a stream that has passed its `stop_time` but whose status is still Active.
+    /// Settle an Active stream whose configured `stop_time` has been reached.
     ///
     /// Callable by anyone. Once `stop_time` has been reached, pays any remaining
     /// claimable tokens to the current receipt holder and transitions the stream
@@ -1111,7 +1113,7 @@ impl StreamContract {
     /// - Panics if stream is not Active
     /// - Panics if `stop_time` is 0 or has not yet been reached
     pub fn settle_stream(env: Env, stream_id: u64) {
-        let mut stream = load_stream(&env, stream_id).expect("stream not found");
+        let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         assert_eq!(stream.status, StreamStatus::Active, "stream not active");
 
         let now = env.ledger().timestamp();
@@ -1142,9 +1144,28 @@ impl StreamContract {
             events::withdrawn(&env, stream_id, &receipt_owner(&env, &stream), amount);
         }
 
+        stream.withdrawn = stream
+            .withdrawn
+            .checked_add(amount)
+            .expect(ERR_OVERFLOW);
+        stream.last_withdraw_time = now;
+        stream.pending_accrual = 0;
         stream.status = StreamStatus::Exhausted;
         stream.locked = false;
         save_stream(&env, &stream);
+        if amount > 0 {
+            events::withdrawn(&env, stream_id, &employee, amount);
+            let remaining = stream.deposit - stream.withdrawn;
+            if stream.low_balance_threshold > 0 && remaining < stream.low_balance_threshold {
+                events::low_balance(
+                    &env,
+                    stream_id,
+                    &stream.employer,
+                    remaining,
+                    stream.low_balance_threshold,
+                );
+            }
+        }
         events::stream_status_changed(&env, stream_id, &StreamStatus::Exhausted);
     }
 
@@ -1285,6 +1306,32 @@ impl StreamContract {
     pub fn claimable(env: Env, stream_id: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         claimable_amount(&stream, env.ledger().timestamp())
+    }
+
+    /// Query claimable amounts for up to 50 streams in a single call.
+    ///
+    /// Missing stream IDs return 0. Results preserve the order of `stream_ids`.
+    ///
+    /// # Parameters
+    /// - `stream_ids` — IDs of the streams to query (max 50)
+    ///
+    /// # Returns
+    /// `Vec<i128>` of claimable amounts in the same order as `stream_ids`.
+    ///
+    /// # Errors
+    /// - Panics if `stream_ids` has more than 50 entries
+    /// - E004 if claimable amount arithmetic overflows
+    pub fn claimable_batch(env: Env, stream_ids: Vec<u64>) -> Vec<i128> {
+        assert!(stream_ids.len() <= 50, "stream_ids length exceeds 50");
+        let now = env.ledger().timestamp();
+        let mut amounts: Vec<i128> = Vec::new(&env);
+        for stream_id in stream_ids.iter() {
+            let amount = load_stream(&env, stream_id)
+                .map(|stream| claimable_amount(&stream, now))
+                .unwrap_or(0);
+            amounts.push_back(amount);
+        }
+        amounts
     }
 
     /// Query how many tokens would be claimable at an arbitrary timestamp.
@@ -1598,6 +1645,44 @@ impl StreamContract {
         get_employee_streams(&env, &employee)
     }
 
+    /// Return a page of stream IDs paying `employee`.
+    ///
+    /// `limit` is capped at 50. If `offset` is at or beyond the number of
+    /// indexed streams, an empty vector is returned.
+    ///
+    /// # Parameters
+    /// - `employee` — employee address to query
+    /// - `offset` — number of stream IDs to skip
+    /// - `limit` — maximum number of IDs to return (capped at 50)
+    ///
+    /// # Returns
+    /// `Vec<u64>` page of stream IDs in creation order.
+    pub fn streams_by_employee_paginated(
+        env: Env,
+        employee: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<u64> {
+        let stream_ids = get_employee_streams(&env, &employee);
+        let mut page: Vec<u64> = Vec::new(&env);
+        if offset >= stream_ids.len() {
+            return page;
+        }
+
+        let end = offset.saturating_add(limit.min(50));
+        let mut position = 0u32;
+        for stream_id in stream_ids.iter() {
+            if position >= end {
+                break;
+            }
+            if position >= offset {
+                page.push_back(stream_id);
+            }
+            position += 1;
+        }
+        page
+    }
+
     /// Return all stream IDs created within the half-open timestamp range [`from_ts`, `to_ts`).
     ///
     /// Streams are indexed by day-bucket (UTC day) at creation time.  This
@@ -1663,5 +1748,19 @@ impl StreamContract {
     /// `u64` count; 0 if the address has no streams.
     pub fn stream_count_by_employee(env: Env, employee: Address) -> u64 {
         get_employee_streams(&env, &employee).len() as u64
+    }
+
+    /// Return the number of streams funded with `token`.
+    ///
+    /// Equivalent to the length of the token's stream index, without returning
+    /// the full ID list. No authorization is required.
+    ///
+    /// # Parameters
+    /// - `token` — token contract address to query
+    ///
+    /// # Returns
+    /// `u64` count; 0 if the token has no streams.
+    pub fn stream_count_by_token(env: Env, token: Address) -> u64 {
+        get_token_streams(&env, &token).len() as u64
     }
 }
