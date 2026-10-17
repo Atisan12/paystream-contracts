@@ -3103,3 +3103,67 @@ fn test_set_low_balance_threshold_negative_rejected() {
     client.set_low_balance_threshold(&employer, &id, &-1);
 }
 
+// ---------------------------------------------------------------------------
+// Issue #325 (PROD-36) – Stream archival
+// ---------------------------------------------------------------------------
+
+/// A Cancelled stream can be archived after the 30-day waiting period and
+/// remains readable via `get_stream`.
+#[test]
+fn test_archive_stream_after_30_days() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.cancel_stream(&employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Cancelled);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp += storage::ARCHIVE_WAIT_PERIOD + 1);
+
+    client.archive_stream(&employer, &id);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.status, StreamStatus::Cancelled);
+}
+
+/// Archiving before the 30-day waiting period is rejected (E031).
+#[test]
+#[should_panic(expected = "E031: archive waiting period has not elapsed")]
+fn test_premature_archive_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.cancel_stream(&employer, &id);
+
+    client.archive_stream(&employer, &id);
+}
+
+/// An Active stream cannot be archived (E030).
+#[test]
+#[should_panic(expected = "E030: stream is not cancelled or exhausted")]
+fn test_active_stream_cannot_be_archived() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.archive_stream(&employer, &id);
+}
+

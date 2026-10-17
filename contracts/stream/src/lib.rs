@@ -20,9 +20,10 @@ use storage::{
     claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
     get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
     get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
-    index_employee_stream, index_employer_stream, index_stream_by_timestamp, load_stream, next_id,
-    remove_auto_topup, save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    get_stream_ended_at, index_employee_stream, index_employer_stream, index_stream_by_timestamp,
+    load_stream, load_stream_any, next_id, remove_auto_topup, save_stream, set_admin,
+    set_auto_topup, set_min_deposit, set_pending_admin, set_pending_admin_nonce,
+    set_pending_upgrade, set_stream_ended_at, TIMELOCK_DELAY,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
@@ -492,6 +493,7 @@ impl StreamContract {
         // Clear any banked pre-rate-change accrual now that it has been paid out.
         stream.pending_accrual = 0;
         if stream.withdrawn >= stream.deposit {
+            set_stream_ended_at(&env, stream_id, now);
             stream.status = StreamStatus::Exhausted;
         }
 
@@ -580,6 +582,7 @@ impl StreamContract {
             // Clear any banked pre-rate-change accrual now that it has been paid out.
             stream.pending_accrual = 0;
             if stream.withdrawn >= stream.deposit {
+                set_stream_ended_at(&env, stream_id, now);
                 stream.status = StreamStatus::Exhausted;
             }
 
@@ -985,6 +988,7 @@ impl StreamContract {
             token_client.transfer(&env.current_contract_address(), &employer, &refund);
         }
 
+        set_stream_ended_at(&env, stream_id, now);
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
         events::stream_cancelled(
@@ -1052,10 +1056,47 @@ impl StreamContract {
                 token_client.transfer(&env.current_contract_address(), &employer, &refund);
             }
 
+            set_stream_ended_at(&env, stream_id, now);
             stream.status = StreamStatus::Cancelled;
             save_stream(&env, &stream);
             events::stream_status_changed(&env, stream_id, &StreamStatus::Cancelled);
         }
+    }
+
+    /// Archive a closed stream, moving its data from persistent to temporary
+    /// (cheaper-rent) storage after a 30-day waiting period. Only Cancelled or
+    /// Exhausted streams are eligible; archived streams are still readable via
+    /// [`get_stream`].
+    ///
+    /// # Parameters
+    /// - `employer` — must match the stream's employer (requires auth)
+    /// - `stream_id` — ID of the stream to archive
+    ///
+    /// # Errors
+    /// - Panics if stream not found
+    /// - Panics if caller is not the stream's employer
+    /// - E030 if stream is not Cancelled or Exhausted
+    /// - E031 if the 30-day waiting period has not elapsed
+    pub fn archive_stream(env: Env, employer: Address, stream_id: u64) {
+        employer.require_auth();
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
+        assert!(
+            stream.status == StreamStatus::Cancelled || stream.status == StreamStatus::Exhausted,
+            "{}",
+            ERR_STREAM_NOT_ENDED
+        );
+        let now = env.ledger().timestamp();
+        let ended_at = get_stream_ended_at(&env, stream_id).unwrap_or(0);
+        assert!(
+            ended_at > 0 && now >= ended_at.saturating_add(ARCHIVE_WAIT_PERIOD),
+            "{}",
+            ERR_ARCHIVE_TOO_EARLY
+        );
+        let key = DataKey::Stream(stream_id);
+        env.storage().temporary().set(&key, &stream);
+        env.storage().persistent().remove(&key);
+        events::stream_archived(&env, stream_id);
     }
 
     /// Employer transfers ownership of a stream to a new employer address.
@@ -1150,6 +1191,7 @@ impl StreamContract {
             .expect(ERR_OVERFLOW);
         stream.last_withdraw_time = now;
         stream.pending_accrual = 0;
+        set_stream_ended_at(&env, stream_id, now);
         stream.status = StreamStatus::Exhausted;
         stream.locked = false;
         save_stream(&env, &stream);
@@ -1230,6 +1272,7 @@ impl StreamContract {
                 continue;
             }
 
+            set_stream_ended_at(&env, stream_id, now);
             stream.status = StreamStatus::Exhausted;
             save_stream(&env, &stream);
             events::stream_expired(&env, stream_id);
@@ -1247,7 +1290,7 @@ impl StreamContract {
     /// # Errors
     /// - Panics if stream not found
     pub fn get_stream(env: Env, stream_id: u64) -> Stream {
-        load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND)
+        load_stream_any(&env, stream_id).expect(ERR_STREAM_NOT_FOUND)
     }
 
     /// Read the full state of up to 50 streams in a single call.
@@ -1350,6 +1393,40 @@ impl StreamContract {
     pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         claimable_amount(&stream, timestamp)
+    }
+
+    /// Estimate when a stream will be exhausted based on its current rate and
+    /// remaining deposit. The on-chain complement to `scripts/project-stream.sh`
+    /// (SC-40). Returns `None` for streams that will never exhaust (already
+    /// terminal, zero rate, or nothing remaining).
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to project
+    ///
+    /// # Returns
+    /// `Option<u64>` — estimated ledger timestamp of exhaustion, or `None`
+    pub fn estimated_exhaustion_time(env: Env, stream_id: u64) -> Option<u64> {
+        let stream = load_stream_any(&env, stream_id)?;
+        match stream.status {
+            StreamStatus::Cancelled | StreamStatus::Exhausted => return None,
+            _ => {}
+        }
+        let now = env.ledger().timestamp();
+        let remaining = stream
+            .deposit
+            .checked_sub(stream.withdrawn)
+            .unwrap_or(0)
+            .max(0);
+        if remaining <= 0 || stream.rate_per_second <= 0 {
+            return None;
+        }
+        let base = if stream.status == StreamStatus::Paused {
+            stream.last_withdraw_time
+        } else {
+            now
+        };
+        let seconds: u64 = (remaining / stream.rate_per_second) as u64;
+        base.checked_add(seconds)
     }
 
     /// Return the current holder of the stream's receipt (PROD-01).

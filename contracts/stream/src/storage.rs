@@ -18,6 +18,10 @@ pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
 /// still have unclaimed tokens or that have not yet crossed stop_time + GRACE_PERIOD.
 pub const GRACE_PERIOD: u64 = 604_800; // 7 days
 
+/// Minimum waiting period (in seconds) after a stream reaches Cancelled or
+/// Exhausted before it may be archived. Default: 30 days = 2_592_000 s.
+pub const ARCHIVE_WAIT_PERIOD: u64 = 2_592_000;
+
 /// Persistent storage TTL thresholds (in ledgers).
 /// Stellar produces ~1 ledger/5 s → 1 year ≈ 6_307_200 ledgers.
 /// We keep stream data alive for at least 1 year and extend to 2 years on
@@ -42,6 +46,31 @@ pub fn load_stream(env: &Env, id: u64) -> Option<Stream> {
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
     }
     stream
+}
+
+/// Load a stream from persistent storage, falling back to temporary (archived)
+/// storage so that archived streams are returned transparently by [`get_stream`].
+pub fn load_stream_any(env: &Env, id: u64) -> Option<Stream> {
+    let key = DataKey::Stream(id);
+    if let Some(s) = env.storage().persistent().get::<DataKey, Stream>(&key) {
+        return Some(s);
+    }
+    env.storage().temporary().get(&key)
+}
+
+/// Record the ledger timestamp at which a stream entered a terminal
+/// (Cancelled or Exhausted) state, used to enforce the archive waiting period.
+pub fn set_stream_ended_at(env: &Env, stream_id: u64, ended_at: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::StreamEndedAt(stream_id), &ended_at);
+}
+
+/// Return the timestamp at which a stream entered a terminal state, if recorded.
+pub fn get_stream_ended_at(env: &Env, stream_id: u64) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::StreamEndedAt(stream_id))
 }
 
 pub fn next_id(env: &Env) -> u64 {

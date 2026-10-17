@@ -1,4 +1,4 @@
-.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks project
 
 build:
 	stellar contract build
@@ -61,3 +61,6 @@ setup-hooks:
 	@echo "✓ Pre-commit hook installed successfully."
 	@echo "The hook will run 'cargo fmt --check' and 'cargo clippy' before each commit."
 	@echo "To skip the hook, use: git commit --no-verify"
+
+project:
+	@./scripts/project-stream.sh $(RATE) $(DEPOSIT) $(STOP_TIME)

@@ -101,6 +101,9 @@ pub enum DataKey {
     StreamsByTimestamp(u64),
     /// Index: token address → Vec<u64> of streams funded with that token.
     TokenStreams(Address),
+    /// Timestamp at which a stream entered a terminal (Cancelled/Exhausted) state,
+    /// used to enforce the 30-day archive waiting period.
+    StreamEndedAt(u64),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -134,6 +137,8 @@ pub enum DataKey {
 /// | E025 | ERR_INVALID_AUTO_TOPUP  | Invalid auto top-up parameters                     |
 /// | E026 | ERR_NO_AUTO_TOPUP       | No auto top-up configured for the stream           |
 /// | E029 | ERR_BATCH_TOO_LARGE     | Batch contains more than 50 streams                |
+/// | E030 | ERR_STREAM_NOT_ENDED    | Stream is not in Cancelled or Exhausted status     |
+/// | E031 | ERR_ARCHIVE_TOO_EARLY   | Archive waiting period has not elapsed             |
 pub const ERR_ZERO_RATE: &str = "E001: rate_per_second must be greater than zero";
 pub const ERR_ZERO_DEPOSIT: &str = "E002: deposit must be positive";
 pub const ERR_REENTRANT: &str = "E003: reentrant withdraw detected";
@@ -167,4 +172,6 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 /// E028: new_employer must differ from the stream's employee.
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
+pub const ERR_STREAM_NOT_ENDED: &str = "E030: stream is not cancelled or exhausted";
+pub const ERR_ARCHIVE_TOO_EARLY: &str = "E031: archive waiting period has not elapsed";
 pub const MAX_BATCH_SIZE: u32 = 50;
