@@ -22,7 +22,7 @@ use storage::{
     get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
     index_employee_stream, index_employer_stream, index_stream_by_timestamp, load_stream, next_id,
     remove_auto_topup, save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    set_pending_admin_nonce, set_pending_upgrade, SECONDS_PER_DAY, TIMELOCK_DELAY,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
@@ -1306,6 +1306,42 @@ impl StreamContract {
     pub fn claimable(env: Env, stream_id: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         claimable_amount(&stream, env.ledger().timestamp())
+    }
+
+    /// Proactively checks whether an Active stream is approaching or has passed
+    /// its `stop_time`, emitting an event so off-chain keeper bots can monitor
+    /// streams that need attention. This function makes no state changes.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to check
+    ///
+    /// # Events
+    /// - `stream_near_expiry` — if `stop_time > 0`, stream is `Active`, and
+    ///   `stop_time - now < 86400` (24 hours)
+    /// - `stream_expired_unresolved` — if `stop_time > 0`, stream is `Active`,
+    ///   and `now > stop_time`
+    ///
+    /// # Errors
+    /// - Panics if stream not found
+    pub fn check_stream_expiry(env: Env, stream_id: u64) {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        assert_eq!(
+            stream.status,
+            StreamStatus::Active,
+            "stream is not active"
+        );
+        if stream.stop_time == 0 {
+            return;
+        }
+
+        let now = env.ledger().timestamp();
+        let seconds_remaining = stream.stop_time.saturating_sub(now) as i128;
+
+        if now > stream.stop_time {
+            events::stream_expired_unresolved(&env, stream_id, stream.stop_time);
+        } else if seconds_remaining < SECONDS_PER_DAY as i128 {
+            events::stream_near_expiry(&env, stream_id, seconds_remaining);
+        }
     }
 
     /// Query claimable amounts for up to 50 streams in a single call.

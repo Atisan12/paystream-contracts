@@ -3,6 +3,19 @@
 Create a salary stream on Stellar Testnet, watch it accrue, and withdraw from it.
 **Estimated time: 5–10 minutes.** No Rust toolchain or contract deployment needed.
 
+## One-command quickstart
+
+The entire setup below is automated in `scripts/quickstart.sh`. Run it to generate
+accounts, fund them via Friendbot, deploy and initialise the contracts, and create
+your first stream in a single command:
+
+```bash
+./scripts/quickstart.sh
+```
+
+The script prints the new **stream ID** and the **claimable amount** after ~5 seconds
+of accrual. You can then withdraw with the manual steps in section 6.
+
 You will play both roles: an **employer** who funds the stream and an **employee** who withdraws.
 The stream uses testnet XLM (via its Stellar Asset Contract), so no token admin is required.
 

@@ -6,6 +6,28 @@ See also: [Error Codes](#error-codes) · [Stream Status Lifecycle](#stream-statu
 
 ---
 
+## Stellar Explorer (Stellar Expert) links
+
+Deep links to [Stellar Expert](https://stellar.expert) for the deployed testnet
+contracts. Use these to verify transactions and inspect on-chain state without
+building custom tooling.
+
+| Contract | Testnet address | Stellar Expert link |
+|---|---|---|
+| PayStream Token | `CDZQHVQHQMHIGJGSQIJVXGPGNZJQDQV4BBKMG7MSIDTJTTBBQYAEUPB` | <https://stellar.expert/explore/testnet/contract/CDZQHVQHQMHIGJGSQIJVXGPGNZJQDQV4BBKMG7MSIDTJTTBBQYAEUPB> |
+| PayStream Stream | `CBXKDJUQYQDQKSQT6AKZRQWXDXTQHVXHBQQJQ3WKDXJHPNMRGYAQMRS` | <https://stellar.expert/explore/testnet/contract/CBXKDJUQYQDQKSQT6AKZRQWXDXTQHVXHBQQJQ3WKDXJHPNMRGYAQMRS> |
+
+> The contract addresses above mirror [docs/testnet.md](testnet.md#current-contract-ids).
+> When `testnet.md` is updated as part of a release, update this table to match so
+> the explorer links stay current. A future improvement is to template these URLs
+> from `testnet.md` so they auto-update on every release.
+
+> **Mainnet:** Placeholder section added until mainnet launch. Mainnet contract IDs
+> and Stellar Explorer links (mainnet network) will be published here after the
+> mainnet prototype (PROD-34 / issue #323) is deployed. See [docs/mainnet.md](mainnet.md).
+
+---
+
 ## Stream Contract
 
 ### `initialize`
@@ -799,6 +821,10 @@ earned    = 50 * 10            = 500
 remaining = 10_000 - 0         = 10_000
 claimable = min(500, 10_000)   = 500
 ```
+
+> Explorer link (example): <https://stellar.expert/explore/testnet/tx/<TX_HASH>>
+> Replace `<TX_HASH>` with the actual transaction hash from your `resume_stream`
+> invocation to inspect it on Stellar Expert.
 
 > Resuming resets `last_withdraw_time`, so tokens accrued before the pause but not yet withdrawn are not carried over. Employees should withdraw before a stream is paused.
 

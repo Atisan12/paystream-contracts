@@ -3103,3 +3103,102 @@ fn test_set_low_balance_threshold_negative_rejected() {
     client.set_low_balance_threshold(&employer, &id, &-1);
 }
 
+/// check_stream_expiry emits stream_near_expiry when stop_time is within 24h
+/// and stream is Active. No state changes are made.
+#[test]
+fn test_check_stream_expiry_near_expiry_event() {
+    use soroban_sdk::testutils::{Events as _, Ledger as _};
+    use soroban_sdk::{symbol_short, IntoVal};
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 1000; // well within 24h
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &stop, &None);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+
+    client.check_stream_expiry(&id);
+
+    let events = env.events().all();
+    let near_event = events.iter().find(|(_, topics, _)| {
+        *topics
+            == vec![
+                &env,
+                symbol_short!("v1").into_val(&env),
+                symbol_short!("near_exp").into_val(&env),
+                id.into_val(&env),
+            ]
+    });
+    assert!(near_event.is_some(), "stream_near_expiry event not emitted");
+    // status unchanged
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+}
+
+/// check_stream_expiry emits stream_expired_unresolved when now > stop_time
+/// and stream is still Active. No state changes are made.
+#[test]
+fn test_check_stream_expiry_expired_unresolved_event() {
+    use soroban_sdk::testutils::{Events as _, Ledger as _};
+    use soroban_sdk::{symbol_short, IntoVal};
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 10;
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &stop, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 60);
+    assert!(env.ledger().timestamp() > stop);
+
+    client.check_stream_expiry(&id);
+
+    let events = env.events().all();
+    let expired_event = events.iter().find(|(_, topics, _)| {
+        *topics
+            == vec![
+                &env,
+                symbol_short!("v1").into_val(&env),
+                symbol_short!("exp_unres").into_val(&env),
+                id.into_val(&env),
+            ]
+    });
+    assert!(expired_event.is_some(), "stream_expired_unresolved event not emitted");
+    // status unchanged (still Active)
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+}
+
+/// check_stream_expiry emits no event when plenty of time remains.
+#[test]
+fn test_check_stream_expiry_no_event_plenty_time() {
+    use soroban_sdk::testutils::{Events as _, Ledger as _};
+    use soroban_sdk::{symbol_short, IntoVal};
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop = now + 2 * 86_400; // 2 days away (> 24h)
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &stop, &None);
+
+    let before = env.events().all().len();
+    client.check_stream_expiry(&id);
+    let after = env.events().all().len();
+
+    assert_eq!(before, after, "no event should be emitted");
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+}
+
