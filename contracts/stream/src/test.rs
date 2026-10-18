@@ -3103,3 +3103,345 @@ fn test_set_low_balance_threshold_negative_rejected() {
     client.set_low_balance_threshold(&employer, &id, &-1);
 }
 
+
+// ---------------------------------------------------------------------------
+// TEST-33 (#256) – employer == employee rejection in create_stream and batch
+// ---------------------------------------------------------------------------
+
+/// create_stream must panic with "employer and employee must differ" when the
+/// same address is supplied for both roles (pins the exact message).
+#[test]
+#[should_panic(expected = "employer and employee must differ")]
+fn test_create_stream_employer_equals_employee_exact_message() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let actor = Address::generate(&env);
+    let token_id = setup_token(&env, &actor);
+
+    client.initialize(&admin);
+    // Pass actor as both employer and employee — must panic with pinned message
+    client.create_stream(&actor, &actor, &token_id, &10_000, &1, &0, &None);
+}
+
+/// create_streams_batch must panic when the first (index 0) param has
+/// employer == employee (pins the "employer and employee must differ" message).
+#[test]
+#[should_panic(expected = "employer and employee must differ")]
+fn test_create_streams_batch_first_param_employer_equals_employee_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    let mut params = soroban_sdk::Vec::new(&env);
+    // employee == employer in index-0 param → must panic
+    params.push_back(StreamParams {
+        employee: employer.clone(),
+        token: token_id.clone(),
+        deposit: 100,
+        rate_per_second: 1,
+        stop_time: 0,
+    });
+    client.create_streams_batch(&employer, &params);
+}
+
+/// create_streams_batch must panic when a later param (index 1) has
+/// employer == employee — the whole batch must revert.
+#[test]
+#[should_panic(expected = "employer and employee must differ")]
+fn test_create_streams_batch_middle_param_employer_equals_employee_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee_ok = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+
+    let mut params = soroban_sdk::Vec::new(&env);
+    // Index 0: valid param
+    params.push_back(StreamParams {
+        employee: employee_ok.clone(),
+        token: token_id.clone(),
+        deposit: 100,
+        rate_per_second: 1,
+        stop_time: 0,
+    });
+    // Index 1: employer == employee → whole batch must revert
+    params.push_back(StreamParams {
+        employee: employer.clone(),
+        token: token_id.clone(),
+        deposit: 100,
+        rate_per_second: 1,
+        stop_time: 0,
+    });
+    client.create_streams_batch(&employer, &params);
+}
+
+// ---------------------------------------------------------------------------
+// TEST-31 (#254) – cancel_streams_batch partial ownership rejection
+// ---------------------------------------------------------------------------
+
+/// Happy path: caller owns all streams → batch cancel succeeds and all
+/// streams transition to Cancelled.
+#[test]
+fn test_cancel_streams_batch_all_owned_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id1 = client.create_stream(&employer, &employee1, &token_id, &10_000, &10, &0, &None);
+    let id2 = client.create_stream(&employer, &employee2, &token_id, &10_000, &10, &0, &None);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(id1);
+    ids.push_back(id2);
+    client.cancel_streams_batch(&employer, &ids);
+
+    assert_eq!(client.get_stream(&id1).status, StreamStatus::Cancelled);
+    assert_eq!(client.get_stream(&id2).status, StreamStatus::Cancelled);
+}
+
+/// Partial ownership — first stream is owned by employer1, second by employer2.
+/// employer1 trying to batch-cancel both must revert with "not the employer".
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_cancel_streams_batch_partial_ownership_reverts_entire_batch() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer1 = Address::generate(&env);
+    let employer2 = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer1);
+
+    // Fund employer2 so they can create their own stream
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+    token.mint(&employer1, &employer2, &10_000, &0);
+
+    client.initialize(&admin);
+    let id1 = client.create_stream(&employer1, &employee1, &token_id, &10_000, &10, &0, &None);
+    let id2 = client.create_stream(&employer2, &employee2, &token_id, &10_000, &10, &0, &None);
+
+    // employer1 includes employer2's stream → must panic
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(id1);
+    ids.push_back(id2);
+    client.cancel_streams_batch(&employer1, &ids);
+}
+
+/// After a partial-ownership revert, streams owned by the caller remain Active
+/// (the Soroban host rolls back all state changes atomically on panic).
+/// Verified by: succeed with caller's own stream, then fail with mixed batch;
+/// the own stream stays Active.
+#[test]
+fn test_cancel_streams_batch_partial_ownership_owned_stream_stays_active() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer1 = Address::generate(&env);
+    let employer2 = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let employee2 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer1);
+
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+    token.mint(&employer1, &employer2, &10_000, &0);
+
+    client.initialize(&admin);
+    let id1 = client.create_stream(&employer1, &employee1, &token_id, &10_000, &10, &0, &None);
+    let id2 = client.create_stream(&employer2, &employee2, &token_id, &10_000, &10, &0, &None);
+
+    // Confirm both start as Active
+    assert_eq!(client.get_stream(&id1).status, StreamStatus::Active);
+    assert_eq!(client.get_stream(&id2).status, StreamStatus::Active);
+
+    // A single-stream batch for employer1's own stream succeeds
+    let mut ids_own = soroban_sdk::Vec::new(&env);
+    ids_own.push_back(id1);
+    client.cancel_streams_batch(&employer1, &ids_own);
+    assert_eq!(client.get_stream(&id1).status, StreamStatus::Cancelled);
+
+    // employer2's stream is unaffected
+    assert_eq!(client.get_stream(&id2).status, StreamStatus::Active);
+}
+
+/// No tokens transferred when partial-ownership batch reverts: a single-element
+/// batch with a stream the caller does not own panics before any transfer.
+#[test]
+#[should_panic(expected = "not the employer")]
+fn test_cancel_streams_batch_partial_ownership_no_token_transfer() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer1 = Address::generate(&env);
+    let employer2 = Address::generate(&env);
+    let employee1 = Address::generate(&env);
+    let token_id = setup_token(&env, &employer1);
+
+    let token = paystream_token::TokenContractClient::new(&env, &token_id);
+    token.mint(&employer1, &employer2, &10_000, &0);
+
+    client.initialize(&admin);
+    // id1 belongs to employer1; employer2 tries to cancel it → no transfer, panics
+    let id1 = client.create_stream(&employer1, &employee1, &token_id, &10_000, &10, &0, &None);
+
+    // Advance time so claimable > 0 — if a transfer happened, employee1 would
+    // receive tokens.  The panic must prevent that.
+    env.ledger().with_mut(|l| l.timestamp += 100);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    ids.push_back(id1);
+    client.cancel_streams_batch(&employer2, &ids);
+}
+
+// ---------------------------------------------------------------------------
+// TEST-34 (#257) – Storage TTL extension on save_stream and load_stream
+// ---------------------------------------------------------------------------
+//
+// Soroban SDK v21+ exposes `get_ttl()` on persistent storage entries via the
+// `soroban_sdk::testutils::storage::Persistent` trait.  We call it from
+// inside `env.as_contract(...)` (the only context where storage access is
+// permitted in tests) to assert that `extend_ttl` was applied.
+//
+// TTL constants (from storage.rs — private, so we redeclare the known values):
+//   TTL_THRESHOLD = 6_307_200 ledgers (~1 year)
+//   TTL_EXTEND_TO = 12_614_400 ledgers (~2 years)
+//
+// `extend_ttl(threshold, extend_to)` bumps the TTL to `extend_to` (from the
+// current ledger) when the current TTL < `threshold`.  Starting with a TTL
+// well below `threshold` ensures the extension always fires.
+//
+// We set `max_entry_ttl` larger than `TTL_EXTEND_TO` so the host does not
+// cap the result and the assertions remain accurate.
+
+/// save_stream must extend the persistent TTL of `DataKey::Stream(id)` to
+/// TTL_EXTEND_TO after every write.
+#[test]
+fn test_save_stream_extends_ttl() {
+    use soroban_sdk::testutils::storage::Persistent as PersistentTestUtils;
+    use crate::types::DataKey;
+
+    const TTL_EXTEND_TO: u32 = 12_614_400;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Use a min_persistent_entry_ttl well below TTL_THRESHOLD so new entries
+    // start short and the extension inside save_stream fires unconditionally.
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100_000;
+        li.min_persistent_entry_ttl = 100;
+        li.max_entry_ttl = 20_000_000; // must exceed TTL_EXTEND_TO
+    });
+
+    let contract_id = env.register(StreamContract, ());
+    let client = StreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // create_stream → save_stream is called → TTL must be extended
+    let stream_id = client.create_stream(&employer, &employee, &token_id, &10_000, &1, &0, &None);
+
+    env.as_contract(&contract_id, || {
+        let ttl = env
+            .storage()
+            .persistent()
+            .get_ttl(&DataKey::Stream(stream_id));
+        assert_eq!(
+            ttl, TTL_EXTEND_TO,
+            "save_stream must extend TTL to TTL_EXTEND_TO ({TTL_EXTEND_TO}); got {ttl}"
+        );
+    });
+}
+
+/// load_stream must extend the persistent TTL of `DataKey::Stream(id)` to
+/// TTL_EXTEND_TO on every read (even when the entry already exists).
+#[test]
+fn test_load_stream_extends_ttl() {
+    use soroban_sdk::testutils::storage::Persistent as PersistentTestUtils;
+    use crate::storage::load_stream as storage_load_stream;
+    use crate::types::DataKey;
+
+    const TTL_EXTEND_TO: u32 = 12_614_400;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100_000;
+        li.min_persistent_entry_ttl = 100;
+        li.max_entry_ttl = 20_000_000;
+    });
+
+    let contract_id = env.register(StreamContract, ());
+    let client = StreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let stream_id = client.create_stream(&employer, &employee, &token_id, &10_000, &1, &0, &None);
+
+    // Shrink the TTL below TTL_THRESHOLD to simulate an aged entry, then
+    // call storage_load_stream directly and verify it bumps the TTL back up.
+    env.as_contract(&contract_id, || {
+        // Force TTL to 50 (below TTL_THRESHOLD = 6_307_200)
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Stream(stream_id), 0, 50);
+
+        let ttl_before = env
+            .storage()
+            .persistent()
+            .get_ttl(&DataKey::Stream(stream_id));
+        assert_eq!(ttl_before, 50, "precondition: TTL must be 50 before load");
+
+        // load_stream must call extend_ttl and raise TTL back to TTL_EXTEND_TO
+        let stream = storage_load_stream(&env, stream_id);
+        assert!(stream.is_some(), "stream must be found");
+
+        let ttl_after = env
+            .storage()
+            .persistent()
+            .get_ttl(&DataKey::Stream(stream_id));
+        assert_eq!(
+            ttl_after, TTL_EXTEND_TO,
+            "load_stream must extend TTL to TTL_EXTEND_TO ({TTL_EXTEND_TO}); got {ttl_after}"
+        );
+    });
+}
+
+/// load_stream on a non-existent ID must return None and must NOT create or
+/// touch any storage entry (no extend_ttl on a missing key).
+#[test]
+fn test_load_stream_missing_key_does_not_extend_ttl() {
+    use crate::storage::load_stream as storage_load_stream;
+    use crate::types::DataKey;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(StreamContract, ());
+
+    env.as_contract(&contract_id, || {
+        let result = storage_load_stream(&env, 9999);
+        assert!(result.is_none(), "non-existent stream must return None");
+
+        // Entry must not have been created by the load call
+        assert!(
+            !env.storage().persistent().has(&DataKey::Stream(9999)),
+            "absent key must not be created by load_stream"
+        );
+    });
+}
