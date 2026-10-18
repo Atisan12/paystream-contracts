@@ -20,17 +20,22 @@ use storage::{
     claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
     get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
     get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
-    index_employee_stream, index_employer_stream, index_stream_by_timestamp, load_stream, next_id,
-    remove_auto_topup, save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    get_template_ids, get_token_streams, index_employee_stream, index_employer_stream,
+    index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
+    receipt_owner, remove_auto_topup, remove_employer_stream, save_stream, save_template,
+    set_admin, set_auto_topup, set_min_deposit, set_pending_admin, set_pending_admin_nonce,
+    set_pending_upgrade, set_receipt_owner, GRACE_PERIOD, TIMELOCK_DELAY,
 };
 use types::{
-    DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
-    ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN,
-    ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
-    ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
-    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
-    MAX_BATCH_SIZE,
+    AutoTopupConfig, DataKey, PendingUpgrade, Stream, StreamParams, StreamStatus,
+    ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE, ERR_BATCH_TOO_LARGE, ERR_BELOW_MIN_DEPOSIT,
+    ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_INVALID_AUTO_TOPUP, ERR_INVALID_RATE,
+    ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NO_AUTO_TOPUP, ERR_NO_PENDING_UPGRADE, ERR_NOT_ADMIN,
+    ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NOT_RECEIPT_OWNER,
+    ERR_NO_PENDING_ADMIN, ERR_OVERFLOW, ERR_REENTRANT, ERR_STOP_TIME_PAST,
+    ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
+    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_TEMPLATE_NOT_FOUND,
+    ERR_UPGRADE_TIMELOCK_ACTIVE, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, MAX_BATCH_SIZE,
 };
 use validate::{validate_create_stream, validate_rate, validate_top_up};
 
@@ -1154,7 +1159,8 @@ impl StreamContract {
         stream.locked = false;
         save_stream(&env, &stream);
         if amount > 0 {
-            events::withdrawn(&env, stream_id, &employee, amount);
+            let owner = receipt_owner(&env, &stream);
+            events::withdrawn(&env, stream_id, &owner, amount);
             let remaining = stream.deposit - stream.withdrawn;
             if stream.low_balance_threshold > 0 && remaining < stream.low_balance_threshold {
                 events::low_balance(
@@ -1425,6 +1431,7 @@ impl StreamContract {
             t.deposit,
             t.rate_per_second,
             t.stop_time,
+            None,
         )
     }
 

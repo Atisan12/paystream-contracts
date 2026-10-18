@@ -389,3 +389,104 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
     }
     result
 }
+
+// ---------------------------------------------------------------------------
+// Token stream index (PROD-02)
+// ---------------------------------------------------------------------------
+
+/// Append `stream_id` to the token's stream index.
+pub fn index_token_stream(env: &Env, token: &Address, stream_id: u64) {
+    let key = DataKey::TokenStreams(token.clone());
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Return all stream IDs funded with `token`.
+pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
+    let key = DataKey::TokenStreams(token.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}
+
+// ---------------------------------------------------------------------------
+// Receipt owner index (PROD-01)
+// ---------------------------------------------------------------------------
+
+/// Return the current receipt holder of a stream.
+/// If no override has been set, returns the stream's original employee.
+pub fn receipt_owner(env: &Env, stream: &Stream) -> Address {
+    let key = DataKey::ReceiptOwner(stream.id);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| stream.employee.clone())
+}
+
+/// Override the receipt owner for a stream (PROD-01 transfer).
+pub fn set_receipt_owner(env: &Env, stream_id: u64, new_owner: &Address) {
+    let key = DataKey::ReceiptOwner(stream_id);
+    env.storage().persistent().set(&key, new_owner);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+// ---------------------------------------------------------------------------
+// Stream template storage (PROD-03)
+// ---------------------------------------------------------------------------
+
+/// Persist a reusable stream template for `employer`.
+pub fn save_template(env: &Env, employer: &Address, template_id: u32, params: &StreamParams) {
+    let key = DataKey::Template(employer.clone(), template_id);
+    env.storage().persistent().set(&key, params);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+    // Maintain the list of template IDs for this employer.
+    let id_key = DataKey::TemplateIds(employer.clone());
+    let mut ids: Vec<u32> = env
+        .storage()
+        .persistent()
+        .get(&id_key)
+        .unwrap_or_else(|| Vec::new(env));
+    if !ids.contains(template_id) {
+        ids.push_back(template_id);
+        env.storage().persistent().set(&id_key, &ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&id_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+}
+
+/// Load a saved template, returning `None` if it does not exist.
+pub fn load_template(env: &Env, employer: &Address, template_id: u32) -> Option<StreamParams> {
+    let key = DataKey::Template(employer.clone(), template_id);
+    env.storage().persistent().get(&key)
+}
+
+/// Return all template IDs saved by `employer`.
+pub fn get_template_ids(env: &Env, employer: &Address) -> Vec<u32> {
+    let key = DataKey::TemplateIds(employer.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
