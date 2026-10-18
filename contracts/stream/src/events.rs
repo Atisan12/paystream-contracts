@@ -117,3 +117,9 @@ pub fn threshold_updated(env: &Env, stream_id: u64, old_threshold: i128, new_thr
     );
 }
 
+
+/// Emitted when `set_max_creates_per_ledger` updates the per-ledger stream creation cap.
+pub fn max_creates_per_ledger_updated(env: &Env, max: u32) {
+    env.events()
+        .publish((symbol_short!("v1"), symbol_short!("rl_upd"),), max);
+}

@@ -3103,3 +3103,111 @@ fn test_set_low_balance_threshold_negative_rejected() {
     client.set_low_balance_threshold(&employer, &id, &-1);
 }
 
+
+// ---------------------------------------------------------------------------
+// SEC-24 / #262 – Rate-limit stream creation per ledger
+// ---------------------------------------------------------------------------
+
+/// At the limit (default 50): the last stream in the same ledger still succeeds.
+#[test]
+fn test_rate_limit_at_limit_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    // Set a small cap so the test is fast.
+    client.set_max_creates_per_ledger(&admin, &0, &3);
+
+    // 3 individual creates in the same ledger — all should succeed.
+    for _ in 0..3 {
+        client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+    }
+}
+
+/// Over the limit: the (cap+1)th create_stream in the same ledger panics with E030.
+#[test]
+#[should_panic(expected = "E030")]
+fn test_rate_limit_over_limit_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_max_creates_per_ledger(&admin, &0, &2);
+
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+    // Third create must panic.
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+}
+
+/// Rate limit resets on the next ledger sequence number.
+#[test]
+fn test_rate_limit_resets_on_new_ledger() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_max_creates_per_ledger(&admin, &0, &1);
+
+    // Use up the quota in ledger N.
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+
+    // Advance to the next ledger sequence.
+    env.ledger().with_mut(|l| l.sequence_number += 1);
+
+    // Quota has reset — this should succeed.
+    client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
+}
+
+/// A batch is counted as a whole against the per-ledger limit.
+#[test]
+fn test_rate_limit_batch_counted_correctly() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_max_creates_per_ledger(&admin, &0, &5);
+
+    // Batch of 5 exactly at the limit — should succeed.
+    let params = make_stream_params(&env, &token_id, 5);
+    client.create_streams_batch(&employer, &params);
+}
+
+/// A batch that exceeds the per-ledger limit panics with E030.
+#[test]
+#[should_panic(expected = "E030")]
+fn test_rate_limit_batch_over_limit_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_max_creates_per_ledger(&admin, &0, &4);
+
+    // Batch of 5 against a cap of 4 must panic.
+    let params = make_stream_params(&env, &token_id, 5);
+    client.create_streams_batch(&employer, &params);
+}
+
+/// set_max_creates_per_ledger requires the correct admin nonce.
+#[test]
+#[should_panic(expected = "E009")]
+fn test_set_max_creates_per_ledger_wrong_nonce_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    // Nonce 0 is correct; passing 99 must panic.
+    client.set_max_creates_per_ledger(&admin, &99, &10);
+}

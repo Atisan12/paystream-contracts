@@ -17,20 +17,21 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Vec}
 /// storage and `version()` can be queried off-chain.
 pub const CONTRACT_VERSION: u32 = 1;
 use storage::{
-    claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
-    get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
-    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
-    index_employee_stream, index_employer_stream, index_stream_by_timestamp, load_stream, next_id,
-    remove_auto_topup, save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    check_and_increment_create_rate, claimable_amount, clear_pending_admin, clear_pending_upgrade,
+    consume_admin_nonce, get_admin, get_admin_nonce, get_auto_topup, get_employee_streams,
+    get_employer_streams, get_max_creates_per_ledger, get_min_deposit, get_pending_admin,
+    get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, index_employee_stream,
+    index_employer_stream, index_stream_by_timestamp, load_stream, next_id, remove_auto_topup,
+    save_stream, set_admin, set_auto_topup, set_max_creates_per_ledger as store_max_creates,
+    set_min_deposit, set_pending_admin, set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
     ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN,
     ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
-    ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
-    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
-    MAX_BATCH_SIZE,
+    ERR_RATE_LIMIT_EXCEEDED, ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED,
+    ERR_STREAM_EXHAUSTED, ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED,
+    ERR_ZERO_DEPOSIT, MAX_BATCH_SIZE,
 };
 use validate::{validate_create_stream, validate_rate, validate_top_up};
 
@@ -220,6 +221,30 @@ impl StreamContract {
         set_min_deposit(&env, amount);
     }
 
+    /// Set the maximum number of streams an employer may create per ledger.
+    ///
+    /// The default is 50. The new value takes effect immediately for the next
+    /// `create_stream` or `create_streams_batch` call.
+    ///
+    /// # Parameters
+    /// - `admin` — must match the stored admin (requires auth)
+    /// - `nonce` — current admin nonce (replay protection)
+    /// - `max` — new per-ledger limit (must be ≥ 1)
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - E009 if `nonce` is wrong
+    /// - Panics if `max` is 0
+    pub fn set_max_creates_per_ledger(env: Env, admin: Address, nonce: u64, max: u32) {
+        admin.require_auth();
+        let stored_admin = get_admin(&env);
+        assert_eq!(admin, stored_admin, "{}", ERR_NOT_ADMIN);
+        consume_admin_nonce(&env, nonce);
+        assert!(max >= 1, "max must be at least 1");
+        store_max_creates(&env, max);
+        events::max_creates_per_ledger_updated(&env, max);
+    }
+
     /// Employer creates a salary stream and deposits funds into the contract escrow.
     ///
     /// Tokens are transferred from `employer` to the contract immediately.
@@ -257,6 +282,9 @@ impl StreamContract {
     ) -> u64 {
         employer.require_auth();
         assert!(!get_paused(&env), "{}", ERR_CONTRACT_PAUSED);
+
+        // SEC-24: enforce per-employer, per-ledger stream creation rate limit.
+        check_and_increment_create_rate(&env, &employer, 1);
 
         let now = env.ledger().timestamp();
         let min_deposit = get_min_deposit(&env);
@@ -330,6 +358,10 @@ impl StreamContract {
         assert!(!get_paused(&env), "{}", ERR_CONTRACT_PAUSED);
         assert!(!params.is_empty(), "{}", ERR_EMPTY_PARAMS);
         assert!(params.len() <= MAX_BATCH_SIZE, "{}", ERR_BATCH_TOO_LARGE);
+
+        // SEC-24: count the entire batch against the per-ledger rate limit so a
+        // single batch call cannot bypass the cap.
+        check_and_increment_create_rate(&env, &employer, params.len());
 
         let now = env.ledger().timestamp();
         let min_deposit = get_min_deposit(&env);

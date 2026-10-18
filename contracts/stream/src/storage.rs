@@ -2,7 +2,7 @@
 
 use crate::types::{
     AutoTopupConfig, DataKey, PendingUpgrade, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_NONCE,
-    ERR_OVERFLOW,
+    ERR_OVERFLOW, ERR_RATE_LIMIT_EXCEEDED, DEFAULT_MAX_CREATES_PER_LEDGER,
 };
 use soroban_sdk::{Address, BytesN, Env, Vec};
 
@@ -388,4 +388,90 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
         bucket += 1;
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// Stream creation rate-limit helpers (SEC-24 / issue #262)
+// ---------------------------------------------------------------------------
+
+/// Return the admin-configured maximum number of streams an employer may
+/// create in a single ledger.  Defaults to [`DEFAULT_MAX_CREATES_PER_LEDGER`]
+/// (50) if never set.
+pub fn get_max_creates_per_ledger(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxCreatesPerLedger)
+        .unwrap_or(DEFAULT_MAX_CREATES_PER_LEDGER)
+}
+
+/// Persist a new value for the per-ledger stream creation cap.
+pub fn set_max_creates_per_ledger(env: &Env, max: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MaxCreatesPerLedger, &max);
+}
+
+/// Enforce the per-employer, per-ledger rate limit and increment the counter.
+///
+/// The function reads the last ledger sequence stored for `employer`.  If it
+/// matches the current ledger the existing count is used; otherwise (new ledger
+/// or first call) the count resets to 0.  It then asserts `count + delta <=
+/// max` before writing the updated count back to temporary storage.
+///
+/// Both keys are stored in **temporary** storage so they automatically expire
+/// after one ledger and never accumulate persistent storage rent.
+///
+/// # Parameters
+/// - `env` — Soroban environment
+/// - `employer` — address being rate-limited
+/// - `delta` — number of streams being created in this call (1 for
+///   `create_stream`, `params.len()` for `create_streams_batch`)
+///
+/// # Panics
+/// - E030 if `count + delta > max`
+pub fn check_and_increment_create_rate(env: &Env, employer: &Address, delta: u32) {
+    let current_ledger = env.ledger().sequence();
+    let max = get_max_creates_per_ledger(env);
+
+    let last_ledger: u32 = env
+        .storage()
+        .temporary()
+        .get(&DataKey::LastCreateLedger(employer.clone()))
+        .unwrap_or(0);
+
+    let count: u32 = if last_ledger == current_ledger {
+        env.storage()
+            .temporary()
+            .get(&DataKey::CreateCountThisLedger(employer.clone()))
+            .unwrap_or(0)
+    } else {
+        // New ledger — the counter resets.
+        0
+    };
+
+    assert!(
+        count.saturating_add(delta) <= max,
+        "{}",
+        ERR_RATE_LIMIT_EXCEEDED
+    );
+
+    // Write back the updated ledger marker and count.  TTL of 2 ledgers is
+    // sufficient — the keys only need to survive until the next ledger closes.
+    let new_count = count + delta;
+    env.storage()
+        .temporary()
+        .set(&DataKey::LastCreateLedger(employer.clone()), &current_ledger);
+    env.storage()
+        .temporary()
+        .set(&DataKey::CreateCountThisLedger(employer.clone()), &new_count);
+    env.storage().temporary().extend_ttl(
+        &DataKey::LastCreateLedger(employer.clone()),
+        2,
+        2,
+    );
+    env.storage().temporary().extend_ttl(
+        &DataKey::CreateCountThisLedger(employer.clone()),
+        2,
+        2,
+    );
 }

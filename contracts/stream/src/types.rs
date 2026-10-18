@@ -101,6 +101,15 @@ pub enum DataKey {
     StreamsByTimestamp(u64),
     /// Index: token address → Vec<u64> of streams funded with that token.
     TokenStreams(Address),
+    /// Ledger sequence number when the employer last created a stream.
+    /// Temporary storage — expires automatically.
+    LastCreateLedger(Address),
+    /// Number of streams created by this employer in the current ledger.
+    /// Temporary storage — expires automatically.
+    CreateCountThisLedger(Address),
+    /// Admin-configurable maximum streams an employer may create per ledger.
+    /// Default: 50. Stored in instance storage.
+    MaxCreatesPerLedger,
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -168,3 +177,7 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
 pub const MAX_BATCH_SIZE: u32 = 50;
+/// E030: per-employer, per-ledger stream creation rate limit exceeded.
+pub const ERR_RATE_LIMIT_EXCEEDED: &str = "E030: stream creation rate limit exceeded for this ledger";
+/// Default maximum number of streams an employer may create in a single ledger.
+pub const DEFAULT_MAX_CREATES_PER_LEDGER: u32 = 50;
