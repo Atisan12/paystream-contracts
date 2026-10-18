@@ -389,3 +389,66 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
     }
     result
 }
+
+
+// ---------------------------------------------------------------------------
+// Split stream beneficiary helpers (PROD-22)
+// ---------------------------------------------------------------------------
+
+/// Store the beneficiary configuration for a split stream.
+pub fn set_split_beneficiaries(env: &Env, stream_id: u64, beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>) {
+    let key = DataKey::SplitBeneficiaries(stream_id);
+    env.storage().persistent().set(&key, beneficiaries);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Retrieve the beneficiary configuration for a split stream.
+pub fn get_split_beneficiaries(env: &Env, stream_id: u64) -> Option<soroban_sdk::Vec<crate::types::SplitBeneficiary>> {
+    let key = DataKey::SplitBeneficiaries(stream_id);
+    let beneficiaries: Option<soroban_sdk::Vec<crate::types::SplitBeneficiary>> = env.storage().persistent().get(&key);
+    if beneficiaries.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    beneficiaries
+}
+
+
+// ---------------------------------------------------------------------------
+// Token stream index helpers
+// ---------------------------------------------------------------------------
+
+/// Append `stream_id` to the token's stream index.
+/// Called once per stream creation; O(1) amortised.
+pub fn index_token_stream(env: &Env, token: &Address, stream_id: u64) {
+    let key = DataKey::TokenStreams(token.clone());
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Return all stream IDs funded with the given token.
+pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
+    let key = DataKey::TokenStreams(token.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}

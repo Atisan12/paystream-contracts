@@ -56,3 +56,23 @@ pub fn validate_rate(rate: i128) {
     assert!(rate > 0, "{}", ERR_ZERO_RATE);
     assert!(rate <= MAX_RATE_PER_SECOND, "{}", ERR_INVALID_RATE);
 }
+
+/// Validate split stream beneficiary configuration.
+///
+/// # Panics
+/// - E031 if fewer than 2 beneficiaries
+/// - E032 if more than 20 beneficiaries
+/// - E030 if basis points do not sum to exactly 10000 (100%)
+pub fn validate_split_beneficiaries(beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>) {
+    use crate::types::{ERR_SPLIT_BASIS_INVALID, ERR_SPLIT_TOO_FEW, ERR_SPLIT_TOO_MANY, MAX_SPLIT_BENEFICIARIES};
+    
+    let count = beneficiaries.len();
+    assert!(count >= 2, "{}", ERR_SPLIT_TOO_FEW);
+    assert!(count <= MAX_SPLIT_BENEFICIARIES as usize, "{}", ERR_SPLIT_TOO_MANY);
+    
+    let mut total_bp: u64 = 0;
+    for benef in beneficiaries.iter() {
+        total_bp += benef.basis_points as u64;
+    }
+    assert!(total_bp == 10000, "{}", ERR_SPLIT_BASIS_INVALID);
+}

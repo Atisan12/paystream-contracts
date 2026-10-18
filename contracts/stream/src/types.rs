@@ -57,6 +57,15 @@ pub struct StreamParams {
     pub stop_time: u64,
 }
 
+/// Single beneficiary in a split stream, with their share in basis points.
+/// 100 basis points = 1%.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitBeneficiary {
+    pub address: Address,
+    pub basis_points: u32,  // 0-10000, where 10000 = 100%
+}
+
 /// Configuration for recurring stream auto top-up.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -101,6 +110,8 @@ pub enum DataKey {
     StreamsByTimestamp(u64),
     /// Index: token address → Vec<u64> of streams funded with that token.
     TokenStreams(Address),
+    /// Split stream beneficiaries: stream ID → Vec<SplitBeneficiary> for multi-recipient streams (PROD-22).
+    SplitBeneficiaries(u64),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -168,3 +179,12 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// E030: split beneficiary basis points must sum to 10000 (100%)
+pub const ERR_SPLIT_BASIS_INVALID: &str = "E030: split beneficiary basis points must sum to 10000";
+/// E031: split stream must have at least 2 beneficiaries
+pub const ERR_SPLIT_TOO_FEW: &str = "E031: split stream must have at least 2 beneficiaries";
+/// E032: split stream cannot have more than 20 beneficiaries
+pub const ERR_SPLIT_TOO_MANY: &str = "E032: split stream cannot have more than 20 beneficiaries";
+pub const MAX_SPLIT_BENEFICIARIES: u32 = 20;
+
