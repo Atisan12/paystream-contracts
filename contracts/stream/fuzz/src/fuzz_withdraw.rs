@@ -51,6 +51,7 @@ fn make_stream(
         status: StreamStatus::Active,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     }
 }
 
@@ -154,6 +155,7 @@ proptest! {
                 status: StreamStatus::Exhausted,
                 locked: false,
                 low_balance_threshold: 0,
+                pause_reason: None,
             }
         };
         prop_assert_eq!(claimable_amount(&stream, now), 0,

@@ -60,7 +60,11 @@ fn test_initialize_emits_event() {
 
     // After initialize, exactly one event must have been emitted
     let events = env.events().all();
-    assert_eq!(events.events().len(), 1, "expected exactly one event from initialize");
+    assert_eq!(
+        events.events().len(),
+        1,
+        "expected exactly one event from initialize"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -98,18 +102,15 @@ fn test_linear_vest_mid_vest_claimable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 50);
     assert_eq!(client.claimable(&stream_id), 50_000);
-    assert_eq!(client.get_stream_type(&stream_id), crate::types::StreamType::LinearVest);
+    assert_eq!(
+        client.get_stream_type(&stream_id),
+        crate::types::StreamType::LinearVest
+    );
 }
 
 #[test]
@@ -121,14 +122,8 @@ fn test_linear_vest_fully_vested_claimable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 100);
     assert_eq!(client.claimable(&stream_id), 100_000);
@@ -143,14 +138,8 @@ fn test_linear_vest_cliff_delays_claimability() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &Some(50),
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &Some(50));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 49);
     assert_eq!(client.claimable(&stream_id), 0);
@@ -169,14 +158,8 @@ fn test_cancel_linear_vest_refunds_unvested_grant() {
     let employer_balance_before = token.balance(&employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &10_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &10_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 40);
     client.cancel_stream(&employer, &stream_id);
@@ -332,7 +315,7 @@ fn test_claimable_batch_mixed_statuses_preserves_order() {
         &None,
     );
 
-    client.pause_stream(&employer, &paused_id);
+    client.pause_stream(&employer, &paused_id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&exhausted_employee, &exhausted_id);
     client.cancel_stream(&employer, &cancelled_id);
@@ -415,7 +398,7 @@ fn test_pause_and_resume() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
@@ -513,7 +496,7 @@ fn test_pause_excludes_paused_time() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 50);
@@ -534,12 +517,12 @@ fn test_multiple_pause_resume_cycles() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 30);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 200);
     client.resume_stream(&employer, &id);
 
     env.ledger().with_mut(|l| l.timestamp += 20);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 300);
     client.resume_stream(&employer, &id);
 
@@ -562,7 +545,7 @@ fn test_withdraw_during_pause_panics() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
@@ -666,6 +649,7 @@ fn test_claimable_overflow_panics() {
         status: StreamStatus::Active,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     };
 
     claimable_amount(&stream, 2);
@@ -694,6 +678,7 @@ fn test_claimable_large_elapsed_capped_by_deposit() {
         status: StreamStatus::Active,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     };
 
     let result = claimable_amount(&stream, u64::MAX);
@@ -939,7 +924,7 @@ fn test_update_rate_on_paused_stream() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     // Update rate while paused
     client.update_rate(&employer, &id, &20);
@@ -1089,7 +1074,10 @@ fn test_update_stop_time_extend_emits_event() {
             ]
             && data.clone().into_val::<(u64, u64)>(&env) == (old_stop_time, new_stop_time)
     });
-    assert!(update_event.is_some(), "stop_time_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "stop_time_updated event not emitted"
+    );
 }
 
 #[test]
@@ -1212,7 +1200,7 @@ fn test_update_stop_time_paused_stream_rejected() {
         &(now + 1_000),
         &None,
     );
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     client.update_stop_time(&employer, &id, &(now + 2_000));
 }
@@ -1587,7 +1575,10 @@ fn test_streams_by_employer_load_100() {
             StreamStatus::Active,
             "stream {id} should be Active"
         );
-        assert_eq!(s.employer, employer, "stream {id} should belong to employer");
+        assert_eq!(
+            s.employer, employer,
+            "stream {id} should belong to employer"
+        );
     }
 
     // --- Soroban limits documentation ---
@@ -1626,7 +1617,7 @@ fn test_cancel_stream_event_contains_amounts() {
     assert!(events.events().len() > 0, "cancelled event not emitted");
     // The cancel_stream call pays claimable=1_000 to employee, refund=9_000 to employer.
     let s = client.get_stream(&id);
-    let claimable = s.withdrawn;         // cancel_stream transfers claimable to employee
+    let claimable = s.withdrawn; // cancel_stream transfers claimable to employee
     let refund = s.deposit - s.withdrawn; // remainder is the refund
     assert_eq!(claimable, 1_000);
     assert_eq!(refund, 9_000);
@@ -1648,7 +1639,7 @@ fn test_cancel_stream_paused_zero_claimable_full_refund_event() {
     // Deposit must be >= default min_deposit (10_000); lower it first.
     client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &5_000, &10, &0, &None);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     client.cancel_stream(&employer, &id);
 
     // Verify stream state (SDK v28: no .iter() on ContractEvents)
@@ -1825,7 +1816,7 @@ fn test_withdraw_all_skips_cancelled_and_paused() {
 
     // Cancel stream 1, pause stream 2 — only stream 3 should be withdrawn
     client.cancel_stream(&employer, &id1);
-    client.pause_stream(&employer, &id2);
+    client.pause_stream(&employer, &id2, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
     let results = client.withdraw_all(&employee);
@@ -2170,7 +2161,7 @@ fn test_stream_status_paused() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     assert_eq!(client.stream_status(&id), StreamStatus::Paused);
 }
 
@@ -2263,8 +2254,14 @@ fn test_cancel_streams_batch_max_size_succeeds() {
     let ids = client.create_streams_batch(&employer, &params);
 
     client.cancel_streams_batch(&employer, &ids);
-    assert_eq!(client.get_stream(&ids.get(0).unwrap()).status, StreamStatus::Cancelled);
-    assert_eq!(client.get_stream(&ids.get(49).unwrap()).status, StreamStatus::Cancelled);
+    assert_eq!(
+        client.get_stream(&ids.get(0).unwrap()).status,
+        StreamStatus::Cancelled
+    );
+    assert_eq!(
+        client.get_stream(&ids.get(49).unwrap()).status,
+        StreamStatus::Cancelled
+    );
 }
 
 #[test]
@@ -2316,9 +2313,7 @@ fn test_pause_stream_batch_succeeds_and_emits_status_events() {
             symbol_short!("status").into_val(&env),
             id.into_val(&env),
         ];
-        assert!(events
-            .iter()
-            .any(|(_, topics, _)| *topics == status_topics));
+        assert!(events.iter().any(|(_, topics, _)| *topics == status_topics));
     }
 }
 
@@ -2334,7 +2329,7 @@ fn test_pause_stream_batch_failure_reverts_prior_changes() {
     client.initialize(&admin);
     let id1 = client.create_stream(&employer, &employee1, &token_id, &100, &1, &0, &None);
     let id2 = client.create_stream(&employer, &employee2, &token_id, &100, &1, &0, &None);
-    client.pause_stream(&employer, &id2);
+    client.pause_stream(&employer, &id2, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(id1);
@@ -2421,7 +2416,7 @@ fn test_resume_stream_batch_failure_reverts_prior_changes() {
     client.initialize(&admin);
     let id1 = client.create_stream(&employer, &employee1, &token_id, &100, &1, &0, &None);
     let id2 = client.create_stream(&employer, &employee2, &token_id, &100, &1, &0, &None);
-    client.pause_stream(&employer, &id1);
+    client.pause_stream(&employer, &id1, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(id1);
@@ -2443,7 +2438,7 @@ fn test_resume_stream_batch_over_max_panics() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &100, &1, &0, &None);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     let mut ids = soroban_sdk::Vec::new(&env);
     for _ in 0..51 {
         ids.push_back(id);
@@ -2493,7 +2488,7 @@ fn test_cancel_streams_batch_includes_paused_stream() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(id);
@@ -2617,7 +2612,7 @@ fn test_pause_stream_batch_one_fails_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     // Pause id2 individually first so it is no longer Active
-    client.pause_stream(&employer, &id2);
+    client.pause_stream(&employer, &id2, &None);
 
     // Batch pause id1 (active) and id2 (paused) — id2 will fail and revert all
     let mut ids = soroban_sdk::Vec::new(&env);
@@ -2760,7 +2755,7 @@ fn test_resume_stream_batch_one_fails_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     // Pause only id1; id2 remains Active
-    client.pause_stream(&employer, &id1);
+    client.pause_stream(&employer, &id1, &None);
 
     // Batch resume id1 (Paused) and id2 (Active) — id2 will fail and revert all
     let mut ids = soroban_sdk::Vec::new(&env);
@@ -2812,7 +2807,7 @@ fn test_resume_stream_batch_wrong_employer_rejected() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer1, &employee, &token_id, &10_000, &10, &0, &None);
-    client.pause_stream(&employer1, &id);
+    client.pause_stream(&employer1, &id, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(id);
@@ -3075,7 +3070,8 @@ fn test_expire_streams_ineligible_skipped() {
 
     // Stream C: eligible — stop_time set, grace elapsed, claimable == 0
     let stop_time: u64 = 1_000_100;
-    let id_eligible = client.create_stream(&employer, &employee, &token_id, &100, &1, &stop_time, &None);
+    let id_eligible =
+        client.create_stream(&employer, &employee, &token_id, &100, &1, &stop_time, &None);
 
     // Withdraw from eligible stream first
     env.ledger().with_mut(|l| l.timestamp = stop_time + 1);
@@ -3159,7 +3155,7 @@ fn test_resume_stream_resets_last_withdraw_time() {
 
     // Advance to T=100 and pause.
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     // Advance to T=200 and resume — last_withdraw_time must be reset to 200.
     env.ledger().with_mut(|l| l.timestamp += 100);
@@ -3317,7 +3313,10 @@ fn test_set_low_balance_threshold_success() {
             ]
             && data.clone().into_val::<(i128, i128)>(&env) == (0, 500)
     });
-    assert!(update_event.is_some(), "threshold_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "threshold_updated event not emitted"
+    );
 
     // Update again to 1200 (500 -> 1200)
     client.set_low_balance_threshold(&employer, &id, &1200);
@@ -3334,7 +3333,10 @@ fn test_set_low_balance_threshold_success() {
             ]
             && data.clone().into_val::<(i128, i128)>(&env) == (500, 1200)
     });
-    assert!(update_event2.is_some(), "second threshold_updated event not emitted");
+    assert!(
+        update_event2.is_some(),
+        "second threshold_updated event not emitted"
+    );
 }
 
 /// Setting threshold to 0 disables low-balance alerts and emits threshold_updated event.
@@ -3350,7 +3352,15 @@ fn test_set_low_balance_threshold_disable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &Some(1_000));
+    let id = client.create_stream(
+        &employer,
+        &employee,
+        &token_id,
+        &10_000,
+        &10,
+        &0,
+        &Some(1_000),
+    );
     assert_eq!(client.get_stream(&id).low_balance_threshold, 1_000);
 
     // Disable alert by setting threshold to 0
@@ -3368,7 +3378,10 @@ fn test_set_low_balance_threshold_disable() {
             ]
             && data.clone().into_val::<(i128, i128)>(&env) == (1_000, 0)
     });
-    assert!(update_event.is_some(), "disable threshold_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "disable threshold_updated event not emitted"
+    );
 }
 
 /// set_low_balance_threshold works on a paused stream.
@@ -3383,7 +3396,7 @@ fn test_set_low_balance_threshold_on_paused_stream() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
 
     client.set_low_balance_threshold(&employer, &id, &750);
@@ -3466,7 +3479,6 @@ fn test_set_low_balance_threshold_negative_rejected() {
     client.set_low_balance_threshold(&employer, &id, &-1);
 }
 
-
 // ===========================================================================
 // TEST-23 (#246): Event payload snapshot tests
 //
@@ -3520,20 +3532,21 @@ mod events {
 
         let events = env.events().all();
         // Find the "created" event (skip initialize event)
-        let created = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("created").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
+        let created = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("created").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
         assert!(created.is_some(), "stream_created event not emitted");
 
         let (_, _, data) = created.unwrap();
-        let (ev_employer, ev_employee, ev_rate): (Address, Address, i128) =
-            data.into_val(&env);
+        let (ev_employer, ev_employee, ev_rate): (Address, Address, i128) = data.into_val(&env);
         assert_eq!(ev_employer, employer, "employer mismatch");
         assert_eq!(ev_employee, employee, "employee mismatch");
         assert_eq!(ev_rate, 10, "rate_per_second mismatch");
@@ -3560,15 +3573,17 @@ mod events {
         client.withdraw(&employee, &id);
 
         let events = env.events().all();
-        let withdrawn = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("withdraw").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
+        let withdrawn = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("withdraw").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
         assert!(withdrawn.is_some(), "withdrawn event not emitted");
 
         let (_, _, data) = withdrawn.unwrap();
@@ -3596,15 +3611,17 @@ mod events {
         client.top_up(&employer, &id, &5_000, &None);
 
         let events = env.events().all();
-        let topup = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("topup").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
+        let topup = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("topup").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
         assert!(topup.is_some(), "topped_up event not emitted");
 
         let (_, _, data) = topup.unwrap();
@@ -3634,15 +3651,17 @@ mod events {
         client.cancel_stream(&employer, &id);
 
         let events = env.events().all();
-        let cancelled = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("cancelled").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
+        let cancelled = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("cancelled").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
         assert!(cancelled.is_some(), "stream_cancelled event not emitted");
 
         let (_, _, data) = cancelled.unwrap();
@@ -3668,19 +3687,24 @@ mod events {
 
         client.initialize(&admin);
         let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-        client.pause_stream(&employer, &id);
+        client.pause_stream(&employer, &id, &None);
 
         let events = env.events().all();
-        let status_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("status").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
-        assert!(status_ev.is_some(), "stream_status_changed event not emitted");
+        let status_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("status").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
+        assert!(
+            status_ev.is_some(),
+            "stream_status_changed event not emitted"
+        );
 
         let (_, _, data) = status_ev.unwrap();
         let ev_status: StreamStatus = data.into_val(&env);
@@ -3706,15 +3730,17 @@ mod events {
         client.update_rate(&employer, &id, &25);
 
         let events = env.events().all();
-        let rate_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("rate_upd").into_val(&env),
-                    id.into_val(&env),
-                ]
-        });
+        let rate_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("rate_upd").into_val(&env),
+                        id.into_val(&env),
+                    ]
+            });
         assert!(rate_ev.is_some(), "rate_updated event not emitted");
 
         let (_, _, data) = rate_ev.unwrap();
@@ -3737,14 +3763,16 @@ mod events {
         client.pause_contract(&0);
 
         let events = env.events().all();
-        let pause_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("paused").into_val(&env),
-                ]
-        });
+        let pause_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("paused").into_val(&env),
+                    ]
+            });
         assert!(pause_ev.is_some(), "contract_paused event not emitted");
 
         let (_, _, data) = pause_ev.unwrap();
@@ -3764,15 +3792,21 @@ mod events {
 
         let events = env.events().all();
         // Find the last "paused" event (the unpause one)
-        let unpause_ev = events.iter().rev().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("paused").into_val(&env),
-                ]
-        });
-        assert!(unpause_ev.is_some(), "contract_paused(false) event not emitted");
+        let unpause_ev = events
+            .iter()
+            .rev()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("paused").into_val(&env),
+                    ]
+            });
+        assert!(
+            unpause_ev.is_some(),
+            "contract_paused(false) event not emitted"
+        );
 
         let (_, _, data) = unpause_ev.unwrap();
         let paused: bool = data.into_val(&env);
@@ -3798,14 +3832,16 @@ mod events {
         client.propose_upgrade(&wasm_hash, &0);
 
         let events = env.events().all();
-        let upg_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("upg_prop").into_val(&env),
-                ]
-        });
+        let upg_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("upg_prop").into_val(&env),
+                    ]
+            });
         assert!(upg_ev.is_some(), "upgrade_proposed event not emitted");
 
         let (_, _, data) = upg_ev.unwrap();
@@ -3855,14 +3891,16 @@ mod events {
         client.upgrade(&hash_clone, &1);
 
         let events = env.events().all();
-        let exec_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("upg_exec").into_val(&env),
-                ]
-        });
+        let exec_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("upg_exec").into_val(&env),
+                    ]
+            });
         assert!(exec_ev.is_some(), "upgrade_executed event not emitted");
 
         let (_, _, data) = exec_ev.unwrap();
@@ -3907,19 +3945,24 @@ fn test_auto_topup_fires_when_below_threshold() {
     // Stream balance should have been replenished
     let s = client.get_stream(&id);
     // deposit was 1_000, withdrew 600, then +500 auto top-up
-    assert_eq!(s.deposit, 1_500, "deposit should be 1_500 after auto top-up");
+    assert_eq!(
+        s.deposit, 1_500,
+        "deposit should be 1_500 after auto top-up"
+    );
 
     // auto_topped_up event must have been emitted
     let events = env.events().all();
-    let at_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-        topics
-            == vec![
-                &env,
-                symbol_short!("v1").into_val(&env),
-                symbol_short!("at_up").into_val(&env),
-                id.into_val(&env),
-            ]
-    });
+    let at_ev = events
+        .iter()
+        .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+            topics
+                == vec![
+                    &env,
+                    symbol_short!("v1").into_val(&env),
+                    symbol_short!("at_up").into_val(&env),
+                    id.into_val(&env),
+                ]
+        });
     assert!(at_ev.is_some(), "auto_topped_up event not emitted");
 
     let (_, _, data) = at_ev.unwrap();
@@ -3985,7 +4028,11 @@ fn test_auto_topup_skipped_when_cap_reached() {
         .collect::<soroban_sdk::Vec<Val>>(&env);
 
     // Only one auto_topped_up event should exist (the first withdraw)
-    assert_eq!(at_events.len(), 1, "expected exactly 1 auto_topped_up event");
+    assert_eq!(
+        at_events.len(),
+        1,
+        "expected exactly 1 auto_topped_up event"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4024,7 +4071,10 @@ fn test_auto_topup_skipped_when_stop_time_passed() {
 
     let s = client.get_stream(&id);
     // deposit unchanged at 10_000 (no auto top-up)
-    assert_eq!(s.deposit, 10_000, "deposit must not change when past stop_time");
+    assert_eq!(
+        s.deposit, 10_000,
+        "deposit must not change when past stop_time"
+    );
 
     let config = client.get_auto_topup_config(&id).unwrap();
     assert_eq!(config.total_topped_up, 0, "no top-up should have occurred");
@@ -4071,7 +4121,10 @@ fn test_auto_topup_skipped_when_allowance_insufficient() {
     env.ledger().with_mut(|l| l.timestamp += 60);
     // Withdraw must succeed even though auto-topup silently fails
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 600, "withdraw should succeed despite failed auto-topup");
+    assert_eq!(
+        withdrawn, 600,
+        "withdraw should succeed despite failed auto-topup"
+    );
 
     // deposit unchanged — auto-topup was skipped
     let s = client.get_stream(&id);
@@ -4107,15 +4160,17 @@ fn test_auto_topup_event_amount_and_total() {
     client.withdraw(&employee, &id);
 
     let events = env.events().all();
-    let ev1 = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-        topics
-            == vec![
-                &env,
-                symbol_short!("v1").into_val(&env),
-                symbol_short!("at_up").into_val(&env),
-                id.into_val(&env),
-            ]
-    });
+    let ev1 = events
+        .iter()
+        .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+            topics
+                == vec![
+                    &env,
+                    symbol_short!("v1").into_val(&env),
+                    symbol_short!("at_up").into_val(&env),
+                    id.into_val(&env),
+                ]
+        });
     assert!(ev1.is_some(), "first auto_topped_up event not emitted");
     let (_, _, data1) = ev1.unwrap();
     let (amount1, total1): (i128, i128) = data1.into_val(&env);
@@ -4151,14 +4206,24 @@ fn test_withdraw_after_rate_update_pays_pending_plus_new() {
     client.update_rate(&employer, &id, &20);
 
     let s = client.get_stream(&id);
-    assert_eq!(s.pending_accrual, 2_000, "pending_accrual must be 2_000 after update_rate");
+    assert_eq!(
+        s.pending_accrual, 2_000,
+        "pending_accrual must be 2_000 after update_rate"
+    );
 
     // 100 s at 20/s → 2_000 new accrual; total claimable = 2_000 + 2_000 = 4_000
     env.ledger().with_mut(|l| l.timestamp += 100);
-    assert_eq!(client.claimable(&id), 4_000, "claimable should include both portions");
+    assert_eq!(
+        client.claimable(&id),
+        4_000,
+        "claimable should include both portions"
+    );
 
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 4_000, "withdraw should transfer full pending + new accrual");
+    assert_eq!(
+        withdrawn, 4_000,
+        "withdraw should transfer full pending + new accrual"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4182,14 +4247,20 @@ fn test_pending_accrual_cleared_after_withdraw() {
 
     // Confirm pending_accrual was set
     let s_before = client.get_stream(&id);
-    assert!(s_before.pending_accrual > 0, "pending_accrual should be > 0 before withdraw");
+    assert!(
+        s_before.pending_accrual > 0,
+        "pending_accrual should be > 0 before withdraw"
+    );
 
     env.ledger().with_mut(|l| l.timestamp += 50);
     client.withdraw(&employee, &id);
 
     // After withdraw, pending_accrual must be 0
     let s_after = client.get_stream(&id);
-    assert_eq!(s_after.pending_accrual, 0, "pending_accrual must be 0 after withdraw");
+    assert_eq!(
+        s_after.pending_accrual, 0,
+        "pending_accrual must be 0 after withdraw"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4225,13 +4296,23 @@ fn test_multiple_rate_updates_accumulate_pending_accrual() {
 
     // Phase 3: 200 s at 5/s → 1_000 new accrual; total claimable = 2_000 + 1_000 = 3_000
     env.ledger().with_mut(|l| l.timestamp += 200);
-    assert_eq!(client.claimable(&id), 3_000, "claimable must sum all phases");
+    assert_eq!(
+        client.claimable(&id),
+        3_000,
+        "claimable must sum all phases"
+    );
 
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 3_000, "withdraw must pay all accumulated accrual");
+    assert_eq!(
+        withdrawn, 3_000,
+        "withdraw must pay all accumulated accrual"
+    );
 
     let s_final = client.get_stream(&id);
-    assert_eq!(s_final.pending_accrual, 0, "pending_accrual cleared after withdraw");
+    assert_eq!(
+        s_final.pending_accrual, 0,
+        "pending_accrual cleared after withdraw"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4265,21 +4346,29 @@ fn test_cancel_after_rate_update_pays_pending_accrual() {
 
     // The cancelled event's claimable_amount should include both portions
     let events = env.events().all();
-    let cancelled = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-        topics
-            == vec![
-                &env,
-                symbol_short!("v1").into_val(&env),
-                symbol_short!("cancelled").into_val(&env),
-                id.into_val(&env),
-            ]
-    });
+    let cancelled = events
+        .iter()
+        .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+            topics
+                == vec![
+                    &env,
+                    symbol_short!("v1").into_val(&env),
+                    symbol_short!("cancelled").into_val(&env),
+                    id.into_val(&env),
+                ]
+        });
     assert!(cancelled.is_some(), "cancelled event not emitted");
 
     let (_, _, data) = cancelled.unwrap();
     let (claimable, refund): (i128, i128) = data.into_val(&env);
-    assert_eq!(claimable, 2_000, "claimable must include pending_accrual + new accrual");
-    assert_eq!(refund, 48_000, "refund = deposit(50_000) - claimable(2_000)");
+    assert_eq!(
+        claimable, 2_000,
+        "claimable must include pending_accrual + new accrual"
+    );
+    assert_eq!(
+        refund, 48_000,
+        "refund = deposit(50_000) - claimable(2_000)"
+    );
 }
 
 // ===========================================================================
@@ -4341,7 +4430,10 @@ fn test_withdraw_all_50_streams() {
     for i in 0..STREAM_COUNT {
         let (stream_id, _) = results.get(i).unwrap();
         let s = client.get_stream(&stream_id);
-        assert_eq!(s.withdrawn, 100, "stream {stream_id}: withdrawn should be 100");
+        assert_eq!(
+            s.withdrawn, 100,
+            "stream {stream_id}: withdrawn should be 100"
+        );
         assert_eq!(
             s.pending_accrual, 0,
             "stream {stream_id}: pending_accrual should be 0"
@@ -4377,5 +4469,78 @@ fn test_withdraw_all_50_streams_within_budget() {
 
     // If CPU budget is exceeded the SDK panics, failing this test automatically
     let results = client.withdraw_all(&employee);
-    assert_eq!(results.len(), STREAM_COUNT, "all 50 streams must be processed");
+    assert_eq!(
+        results.len(),
+        STREAM_COUNT,
+        "all 50 streams must be processed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PROD-27: pause_reason field tests
+// ---------------------------------------------------------------------------
+
+/// Test pause_stream with a reason stores the pause_reason in the stream.
+#[test]
+fn test_pause_stream_with_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    let reason = soroban_sdk::String::from_slice(&env, "Employee on leave");
+    client.pause_stream(&employer, &id, &Some(reason.clone()));
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Paused);
+    assert_eq!(stream.pause_reason, Some(reason));
+}
+
+/// Test pause_stream with None reason stores None in the stream.
+#[test]
+fn test_pause_stream_without_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.pause_stream(&employer, &id, &None);
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Paused);
+    assert_eq!(stream.pause_reason, None);
+}
+
+/// Test resume_stream clears the pause_reason when resuming.
+#[test]
+fn test_resume_stream_clears_pause_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    let reason = soroban_sdk::String::from_slice(&env, "Temporary suspension");
+    client.pause_stream(&employer, &id, &Some(reason));
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.pause_reason, Some(reason));
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.resume_stream(&employer, &id);
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Active);
+    assert_eq!(stream.pause_reason, None);
 }

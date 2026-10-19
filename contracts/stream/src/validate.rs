@@ -2,7 +2,7 @@
 
 use crate::types::{
     ERR_AMOUNT_NOT_POSITIVE, ERR_BELOW_MIN_DEPOSIT, ERR_INVALID_RATE, ERR_STOP_TIME_PAST,
-    ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STOP_TIME_TOO_FAR, MAX_STOP_TIME_OFFSET,
+    ERR_STOP_TIME_TOO_FAR, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, MAX_STOP_TIME_OFFSET,
 };
 use soroban_sdk::Address;
 
@@ -70,13 +70,21 @@ pub fn validate_rate(rate: i128) {
 /// - E031 if fewer than 2 beneficiaries
 /// - E032 if more than 20 beneficiaries
 /// - E030 if basis points do not sum to exactly 10000 (100%)
-pub fn validate_split_beneficiaries(beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>) {
-    use crate::types::{ERR_SPLIT_BASIS_INVALID, ERR_SPLIT_TOO_FEW, ERR_SPLIT_TOO_MANY, MAX_SPLIT_BENEFICIARIES};
-    
+pub fn validate_split_beneficiaries(
+    beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>,
+) {
+    use crate::types::{
+        ERR_SPLIT_BASIS_INVALID, ERR_SPLIT_TOO_FEW, ERR_SPLIT_TOO_MANY, MAX_SPLIT_BENEFICIARIES,
+    };
+
     let count = beneficiaries.len();
     assert!(count >= 2, "{}", ERR_SPLIT_TOO_FEW);
-    assert!(count <= MAX_SPLIT_BENEFICIARIES as usize, "{}", ERR_SPLIT_TOO_MANY);
-    
+    assert!(
+        count <= MAX_SPLIT_BENEFICIARIES as usize,
+        "{}",
+        ERR_SPLIT_TOO_MANY
+    );
+
     let mut total_bp: u64 = 0;
     for benef in beneficiaries.iter() {
         total_bp += benef.basis_points as u64;

@@ -32,6 +32,7 @@ fn make_stream(
         status,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     }
 }
 

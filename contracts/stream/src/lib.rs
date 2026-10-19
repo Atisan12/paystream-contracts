@@ -23,23 +23,25 @@ pub const CONTRACT_VERSION: u32 = 1;
 use storage::{
     claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
     get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
-    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, get_token_streams,
-    index_employee_stream, index_employer_stream, index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
-    receipt_owner, remove_auto_topup, save_stream, save_template, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, set_receipt_owner, get_template_ids, TIMELOCK_DELAY,
+    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
+    get_template_ids, get_token_streams, index_employee_stream, index_employer_stream,
+    index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
+    receipt_owner, remove_auto_topup, save_stream, save_template, set_admin, set_auto_topup,
+    set_min_deposit, set_pending_admin, set_pending_admin_nonce, set_pending_upgrade,
+    set_receipt_owner, TIMELOCK_DELAY,
 };
 use types::{
-    DataKey, LinearVestSchedule, Stream, StreamParams, StreamStatus, StreamType,
-    ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
-    ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN,
-    ERR_INVALID_STOP_TIME, ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN,
-    ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
-    ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
-    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
-    ERR_NOT_RECEIPT_OWNER, ERR_TEMPLATE_NOT_FOUND,
-    MAX_BATCH_SIZE,
+    DataKey, LinearVestSchedule, Stream, StreamParams, StreamStatus, StreamType, ERR_ADMIN_NOT_SET,
+    ERR_BAD_PENDING_NONCE, ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS,
+    ERR_INVALID_STOP_TIME, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN, ERR_NOT_EMPLOYEE,
+    ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NOT_RECEIPT_OWNER, ERR_NO_PENDING_ADMIN,
+    ERR_OVERFLOW, ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED,
+    ERR_STREAM_EXHAUSTED, ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED,
+    ERR_TEMPLATE_NOT_FOUND, ERR_ZERO_DEPOSIT, MAX_BATCH_SIZE,
 };
-use validate::{validate_create_stream, validate_rate, validate_split_beneficiaries, validate_top_up};
+use validate::{
+    validate_create_stream, validate_rate, validate_split_beneficiaries, validate_top_up,
+};
 
 fn get_paused(env: &Env) -> bool {
     env.storage()
@@ -356,6 +358,7 @@ impl StreamContract {
             pending_accrual: 0,
             locked: false,
             low_balance_threshold: low_balance_threshold.unwrap_or(0),
+            pause_reason: None,
         };
         save_stream(&env, &stream);
         index_employer_stream(&env, &employer, id);
@@ -384,7 +387,11 @@ impl StreamContract {
 
         let now = env.ledger().timestamp();
         assert!(total_grant > 0, "{}", ERR_ZERO_DEPOSIT);
-        assert!(total_grant >= get_min_deposit(&env), "{}", ERR_BELOW_MIN_DEPOSIT);
+        assert!(
+            total_grant >= get_min_deposit(&env),
+            "{}",
+            ERR_BELOW_MIN_DEPOSIT
+        );
         assert!(vest_period > 0, "vest period must be greater than zero");
         assert!(
             cliff.is_none_or(|cliff_duration| cliff_duration <= vest_period),
@@ -423,6 +430,7 @@ impl StreamContract {
             pending_accrual: 0,
             locked: false,
             low_balance_threshold: 0,
+            pause_reason: None,
         };
         save_stream(&env, &stream);
         set_linear_vest_schedule(
@@ -490,12 +498,7 @@ impl StreamContract {
         for p in params.iter() {
             // Validate each parameter independently and prefix any panic with the
             // stream index so callers can identify which entry failed.
-            assert!(
-                p.deposit > 0,
-                "stream[{}]: {}",
-                index,
-                ERR_ZERO_DEPOSIT
-            );
+            assert!(p.deposit > 0, "stream[{}]: {}", index, ERR_ZERO_DEPOSIT);
             assert!(
                 p.deposit >= min_deposit,
                 "stream[{}]: {}",
@@ -576,6 +579,7 @@ impl StreamContract {
                 pending_accrual: 0,
                 locked: false,
                 low_balance_threshold: 0,
+                pause_reason: None,
             };
             save_stream(&env, &stream);
             index_employer_stream(&env, &employer, id);
@@ -673,6 +677,7 @@ impl StreamContract {
             pending_accrual: 0,
             locked: false,
             low_balance_threshold: low_balance_threshold.unwrap_or(0),
+            pause_reason: None,
         };
 
         save_stream(&env, &stream);
@@ -749,10 +754,7 @@ impl StreamContract {
         stream.locked = true;
         save_stream(&env, &stream);
 
-        stream.withdrawn = stream
-            .withdrawn
-            .checked_add(amount)
-            .expect(ERR_OVERFLOW);
+        stream.withdrawn = stream.withdrawn.checked_add(amount).expect(ERR_OVERFLOW);
         stream.last_withdraw_time = now;
         // Clear any banked pre-rate-change accrual now that it has been paid out.
         stream.pending_accrual = 0;
@@ -805,7 +807,7 @@ impl StreamContract {
 
         let stream_ids = get_employee_streams(&env, &employee);
         let mut results: Vec<(u64, i128)> = Vec::new(&env);
-        
+
         // Return empty results gracefully if employee has no streams
         if stream_ids.is_empty() {
             return results;
@@ -843,10 +845,7 @@ impl StreamContract {
             stream.locked = true;
             save_stream(&env, &stream);
 
-            stream.withdrawn = stream
-                .withdrawn
-                .checked_add(amount)
-                .expect(ERR_OVERFLOW);
+            stream.withdrawn = stream.withdrawn.checked_add(amount).expect(ERR_OVERFLOW);
             stream.last_withdraw_time = now;
             // Clear any banked pre-rate-change accrual now that it has been paid out.
             stream.pending_accrual = 0;
@@ -911,10 +910,7 @@ impl StreamContract {
         let token_client = token::Client::new(&env, &stream.token);
         token_client.transfer(&employer, &env.current_contract_address(), &amount);
 
-        stream.deposit = stream
-            .deposit
-            .checked_add(amount)
-            .expect(ERR_OVERFLOW);
+        stream.deposit = stream.deposit.checked_add(amount).expect(ERR_OVERFLOW);
         if let Some(threshold) = low_balance_threshold {
             stream.low_balance_threshold = threshold;
         }
@@ -937,12 +933,7 @@ impl StreamContract {
     /// - Panics if stream not found (E015)
     /// - Panics if stream is Cancelled (E005) or Exhausted (E006)
     /// - Panics if threshold is negative
-    pub fn set_low_balance_threshold(
-        env: Env,
-        employer: Address,
-        stream_id: u64,
-        threshold: i128,
-    ) {
+    pub fn set_low_balance_threshold(env: Env, employer: Address, stream_id: u64, threshold: i128) {
         employer.require_auth();
         assert!(threshold >= 0, "threshold must be non-negative");
 
@@ -1062,20 +1053,32 @@ impl StreamContract {
     /// # Parameters
     /// - `employer` — must match the stream's employer (requires auth)
     /// - `stream_id` — ID of the stream to pause
+    /// - `pause_reason` — optional reason for pausing (regulatory compliance and dispute resolution)
     ///
     /// # Errors
     /// - Panics if stream not found
     /// - Panics if caller is not the stream's employer
     /// - Panics if stream is not Active
-    pub fn pause_stream(env: Env, employer: Address, stream_id: u64) {
+    pub fn pause_stream(
+        env: Env,
+        employer: Address,
+        stream_id: u64,
+        pause_reason: Option<soroban_sdk::String>,
+    ) {
         employer.require_auth();
         let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
-        assert_eq!(stream.status, StreamStatus::Active, "{}", ERR_STREAM_NOT_ACTIVE);
+        assert_eq!(
+            stream.status,
+            StreamStatus::Active,
+            "{}",
+            ERR_STREAM_NOT_ACTIVE
+        );
         if get_stream_type(&env, stream_id) == StreamType::LinearVest {
             stream.last_withdraw_time = env.ledger().timestamp();
         }
         stream.status = StreamStatus::Paused;
+        stream.pause_reason = pause_reason;
         save_stream(&env, &stream);
         events::stream_status_changed(&env, stream_id, &StreamStatus::Paused);
     }
@@ -1095,13 +1098,22 @@ impl StreamContract {
     pub fn pause_stream_batch(env: Env, employer: Address, stream_ids: Vec<u64>) {
         employer.require_auth();
         assert!(!stream_ids.is_empty(), "stream_ids must not be empty");
-        assert!(stream_ids.len() <= MAX_BATCH_SIZE, "{}", ERR_BATCH_TOO_LARGE);
+        assert!(
+            stream_ids.len() <= MAX_BATCH_SIZE,
+            "{}",
+            ERR_BATCH_TOO_LARGE
+        );
 
         let now = env.ledger().timestamp();
         for stream_id in stream_ids.iter() {
             let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
             assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
-            assert_eq!(stream.status, StreamStatus::Active, "{}", ERR_STREAM_NOT_ACTIVE);
+            assert_eq!(
+                stream.status,
+                StreamStatus::Active,
+                "{}",
+                ERR_STREAM_NOT_ACTIVE
+            );
 
             if get_stream_type(&env, stream_id) == StreamType::LinearVest {
                 stream.last_withdraw_time = now;
@@ -1129,15 +1141,27 @@ impl StreamContract {
         employer.require_auth();
         let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
-        assert_eq!(stream.status, StreamStatus::Paused, "{}", ERR_STREAM_NOT_PAUSED);
+        assert_eq!(
+            stream.status,
+            StreamStatus::Paused,
+            "{}",
+            ERR_STREAM_NOT_PAUSED
+        );
         let now = env.ledger().timestamp();
         if get_stream_type(&env, stream_id) == StreamType::LinearVest {
             let paused_for = now.saturating_sub(stream.last_withdraw_time);
-            stream.start_time = stream.start_time.checked_add(paused_for).expect(ERR_OVERFLOW);
-            stream.stop_time = stream.stop_time.checked_add(paused_for).expect(ERR_OVERFLOW);
+            stream.start_time = stream
+                .start_time
+                .checked_add(paused_for)
+                .expect(ERR_OVERFLOW);
+            stream.stop_time = stream
+                .stop_time
+                .checked_add(paused_for)
+                .expect(ERR_OVERFLOW);
         }
         stream.last_withdraw_time = now;
         stream.status = StreamStatus::Active;
+        stream.pause_reason = None;
         save_stream(&env, &stream);
         events::stream_status_changed(&env, stream_id, &StreamStatus::Active);
     }
@@ -1158,18 +1182,33 @@ impl StreamContract {
     pub fn resume_stream_batch(env: Env, employer: Address, stream_ids: Vec<u64>) {
         employer.require_auth();
         assert!(!stream_ids.is_empty(), "stream_ids must not be empty");
-        assert!(stream_ids.len() <= MAX_BATCH_SIZE, "{}", ERR_BATCH_TOO_LARGE);
+        assert!(
+            stream_ids.len() <= MAX_BATCH_SIZE,
+            "{}",
+            ERR_BATCH_TOO_LARGE
+        );
 
         let now = env.ledger().timestamp();
         for stream_id in stream_ids.iter() {
             let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
             assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
-            assert_eq!(stream.status, StreamStatus::Paused, "{}", ERR_STREAM_NOT_PAUSED);
+            assert_eq!(
+                stream.status,
+                StreamStatus::Paused,
+                "{}",
+                ERR_STREAM_NOT_PAUSED
+            );
 
             if get_stream_type(&env, stream_id) == StreamType::LinearVest {
                 let paused_for = now.saturating_sub(stream.last_withdraw_time);
-                stream.start_time = stream.start_time.checked_add(paused_for).expect(ERR_OVERFLOW);
-                stream.stop_time = stream.stop_time.checked_add(paused_for).expect(ERR_OVERFLOW);
+                stream.start_time = stream
+                    .start_time
+                    .checked_add(paused_for)
+                    .expect(ERR_OVERFLOW);
+                stream.stop_time = stream
+                    .stop_time
+                    .checked_add(paused_for)
+                    .expect(ERR_OVERFLOW);
             }
             stream.last_withdraw_time = now;
             stream.status = StreamStatus::Active;
@@ -1250,7 +1289,12 @@ impl StreamContract {
 
         let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
-        assert_eq!(stream.status, StreamStatus::Active, "{}", ERR_STREAM_NOT_ACTIVE);
+        assert_eq!(
+            stream.status,
+            StreamStatus::Active,
+            "{}",
+            ERR_STREAM_NOT_ACTIVE
+        );
         assert!(
             new_stop_time == 0 || new_stop_time >= stream.last_withdraw_time,
             "{}",
@@ -1296,10 +1340,7 @@ impl StreamContract {
                 &receipt_owner(&env, &stream),
                 &claimable,
             );
-            stream.withdrawn = stream
-                .withdrawn
-                .checked_add(claimable)
-                .expect(ERR_OVERFLOW);
+            stream.withdrawn = stream.withdrawn.checked_add(claimable).expect(ERR_OVERFLOW);
         }
 
         let refund = stream
@@ -1313,12 +1354,7 @@ impl StreamContract {
 
         stream.status = StreamStatus::Cancelled;
         save_stream(&env, &stream);
-        events::stream_cancelled(
-            &env,
-            stream_id,
-            claimable,
-            refund,
-        );
+        events::stream_cancelled(&env, stream_id, claimable, refund);
     }
 
     /// Employer cancels multiple streams atomically in a single transaction.
@@ -1342,7 +1378,11 @@ impl StreamContract {
     pub fn cancel_streams_batch(env: Env, employer: Address, stream_ids: Vec<u64>) {
         employer.require_auth();
         assert!(!stream_ids.is_empty(), "stream_ids must not be empty");
-        assert!(stream_ids.len() <= MAX_BATCH_SIZE, "{}", ERR_BATCH_TOO_LARGE);
+        assert!(
+            stream_ids.len() <= MAX_BATCH_SIZE,
+            "{}",
+            ERR_BATCH_TOO_LARGE
+        );
 
         let now = env.ledger().timestamp();
 
@@ -1363,10 +1403,7 @@ impl StreamContract {
                     &receipt_owner(&env, &stream),
                     &claimable,
                 );
-                stream.withdrawn = stream
-                    .withdrawn
-                    .checked_add(claimable)
-                    .expect(ERR_OVERFLOW);
+                stream.withdrawn = stream.withdrawn.checked_add(claimable).expect(ERR_OVERFLOW);
             }
 
             let refund = stream
@@ -1411,7 +1448,11 @@ impl StreamContract {
             "{}",
             ERR_STREAM_ALREADY_ENDED
         );
-        assert_ne!(new_employer, stream.employee, "{}", ERR_NEW_EMPLOYER_IS_EMPLOYEE);
+        assert_ne!(
+            new_employer, stream.employee,
+            "{}",
+            ERR_NEW_EMPLOYER_IS_EMPLOYEE
+        );
 
         // Update EmployerStreams index: remove stream_id from old employer, add to new.
         remove_employer_stream(&env, &employer, stream_id);
@@ -1454,10 +1495,7 @@ impl StreamContract {
             stream.locked = true;
             save_stream(&env, &stream);
 
-            stream.withdrawn = stream
-                .withdrawn
-                .checked_add(amount)
-                .expect(ERR_OVERFLOW);
+            stream.withdrawn = stream.withdrawn.checked_add(amount).expect(ERR_OVERFLOW);
             stream.last_withdraw_time = now;
             stream.pending_accrual = 0;
 
@@ -1470,10 +1508,7 @@ impl StreamContract {
             events::withdrawn(&env, stream_id, &receipt_owner(&env, &stream), amount);
         }
 
-        stream.withdrawn = stream
-            .withdrawn
-            .checked_add(amount)
-            .expect(ERR_OVERFLOW);
+        stream.withdrawn = stream.withdrawn.checked_add(amount).expect(ERR_OVERFLOW);
         stream.last_withdraw_time = now;
         stream.pending_accrual = 0;
         stream.status = StreamStatus::Exhausted;
@@ -1664,11 +1699,7 @@ impl StreamContract {
     /// - Panics if stream not found
     pub fn check_stream_expiry(env: Env, stream_id: u64) {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
-        assert_eq!(
-            stream.status,
-            StreamStatus::Active,
-            "stream is not active"
-        );
+        assert_eq!(stream.status, StreamStatus::Active, "stream is not active");
         if stream.stop_time == 0 {
             return;
         }
@@ -1746,19 +1777,25 @@ impl StreamContract {
     /// - E015 if stream not found
     pub fn check_low_balance(env: Env, stream_id: u64) -> bool {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
-        
+
         // No threshold configured
         if stream.low_balance_threshold == 0 {
             return false;
         }
-        
+
         let remaining = stream.deposit - stream.withdrawn;
         let threshold_breached = remaining < stream.low_balance_threshold;
-        
+
         if threshold_breached {
-            events::low_balance_check(&env, stream_id, &stream.employer, remaining, stream.low_balance_threshold);
+            events::low_balance_check(
+                &env,
+                stream_id,
+                &stream.employer,
+                remaining,
+                stream.low_balance_threshold,
+            );
         }
-        
+
         threshold_breached
     }
 
@@ -1991,10 +2028,7 @@ impl StreamContract {
     /// # Returns
     /// Version as `u32`.
     pub fn version(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::Version)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
     /// Return the total number of streams ever created.

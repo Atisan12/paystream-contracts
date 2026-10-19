@@ -111,7 +111,7 @@ proptest! {
                 }
                 Op::Pause => {
                     if current_status == StreamStatus::Active {
-                        client.pause_stream(&employer, &stream_id);
+                        client.pause_stream(&employer, &stream_id, &None);
                         current_status = StreamStatus::Paused;
                     }
                 }
@@ -350,7 +350,7 @@ proptest! {
         for _ in 0..cycles {
             // Active → Paused
             env.ledger().with_mut(|l| l.timestamp += time_per_step);
-            client.pause_stream(&employer, &stream_id);
+            client.pause_stream(&employer, &stream_id, &None);
             let s = client.get_stream(&stream_id);
             prop_assert_eq!(
                 s.status, StreamStatus::Paused,
