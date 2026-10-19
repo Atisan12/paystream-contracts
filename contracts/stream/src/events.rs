@@ -65,6 +65,27 @@ pub fn stream_expired(env: &Env, stream_id: u64) {
         .publish((symbol_short!("expired"), stream_id), ());
 }
 
+/// Emitted by `check_stream_expiry` when an Active stream's `stop_time` is
+/// approaching (within 24 hours / 86400 seconds). No state is changed.
+pub fn stream_near_expiry(env: &Env, stream_id: u64, seconds_remaining: i128) {
+    env.events()
+        .publish(
+            (symbol_short!("v1"), symbol_short!("near_exp")),
+            (stream_id, seconds_remaining),
+        );
+}
+
+/// Emitted by `check_stream_expiry` when an Active stream has passed its
+/// `stop_time` and remains unresolved (not yet settled or cancelled). No
+/// state is changed.
+pub fn stream_expired_unresolved(env: &Env, stream_id: u64, stop_time: u64) {
+    env.events()
+        .publish(
+            (symbol_short!("v1"), symbol_short!("exp_unres")),
+            (stream_id, stop_time),
+        );
+}
+
 pub fn upgrade_proposed(env: &Env, wasm_hash: &soroban_sdk::BytesN<32>, unlock_time: u64) {
     env.events()
         .publish((symbol_short!("v1"), symbol_short!("upg_prop"),), (wasm_hash.clone(), unlock_time));
