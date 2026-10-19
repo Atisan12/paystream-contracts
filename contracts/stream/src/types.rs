@@ -168,3 +168,9 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// E030: stop_time extends beyond 10-year limit from now
+pub const ERR_STOP_TIME_TOO_FAR: &str = "E030: stop_time must not exceed 10 years from now";
+
+/// Maximum stop_time window: 10 years in seconds (315,360,000 seconds)
+pub const MAX_STOP_TIME_OFFSET: u64 = 315_360_000;

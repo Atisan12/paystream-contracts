@@ -540,6 +540,12 @@ impl StreamContract {
 
         let stream_ids = get_employee_streams(&env, &employee);
         let mut results: Vec<(u64, i128)> = Vec::new(&env);
+        
+        // Return empty results gracefully if employee has no streams
+        if stream_ids.is_empty() {
+            return results;
+        }
+
         let now = env.ledger().timestamp();
 
         for stream_id in stream_ids.iter() {
@@ -1762,5 +1768,79 @@ impl StreamContract {
     /// `u64` count; 0 if the token has no streams.
     pub fn stream_count_by_token(env: Env, token: Address) -> u64 {
         get_token_streams(&env, &token).len() as u64
+    }
+
+    /// Return the remaining escrowed balance for a stream (deposit - withdrawn).
+    ///
+    /// Provides a clear semantic anchor for monitoring tools and dashboards.
+    /// Useful for tracking how much of the original deposit remains available
+    /// for the employee to claim.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to query
+    ///
+    /// # Returns
+    /// `i128` remaining balance; 0 for Cancelled/Exhausted streams.
+    /// Panics if stream not found (E015).
+    pub fn deposit_remaining(env: Env, stream_id: u64) -> i128 {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        
+        // Return 0 for Cancelled or Exhausted streams
+        if stream.status == StreamStatus::Cancelled || stream.status == StreamStatus::Exhausted {
+            return 0;
+        }
+
+        stream.deposit.saturating_sub(stream.withdrawn).max(0)
+    }
+
+    /// Return the estimated time when a stream will be exhausted.
+    ///
+    /// Provides on-chain calculation to ensure consistent results across all
+    /// clients and reduce duplicated client-side logic.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to query
+    ///
+    /// # Returns
+    /// `Option<u64>` timestamp when the stream deposits will be fully claimed;
+    /// `None` if stream is Paused, Cancelled, Exhausted, or has rate == 0.
+    ///
+    /// Calculation: `now + (deposit - withdrawn - claimable) / rate_per_second`,
+    /// capped at `stop_time` if set.
+    pub fn estimated_exhaustion_time(env: Env, stream_id: u64) -> Option<u64> {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        let now = env.ledger().timestamp();
+
+        // Return None for non-Active streams
+        if stream.status != StreamStatus::Active {
+            return None;
+        }
+
+        // Return None if rate is 0 (stream will never exhaust)
+        if stream.rate_per_second == 0 {
+            return None;
+        }
+
+        let claimable = claimable_amount(&stream, now);
+        let remaining = stream
+            .deposit
+            .saturating_sub(stream.withdrawn)
+            .saturating_sub(claimable);
+
+        if remaining <= 0 {
+            // Already claimable everything up to now
+            return Some(now);
+        }
+
+        // Calculate seconds until exhaustion
+        let seconds_remaining: u64 = (remaining / stream.rate_per_second) as u64;
+        let estimated_time = now.saturating_add(seconds_remaining);
+
+        // Cap at stop_time if set and in the future
+        if stream.stop_time > 0 && stream.stop_time < estimated_time {
+            Some(stream.stop_time)
+        } else {
+            Some(estimated_time)
+        }
     }
 }
