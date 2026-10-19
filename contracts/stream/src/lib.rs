@@ -5,6 +5,7 @@
 mod events;
 pub mod storage;
 pub mod types;
+pub mod utils;
 pub mod validate;
 
 #[cfg(test)]
@@ -19,10 +20,10 @@ pub const CONTRACT_VERSION: u32 = 1;
 use storage::{
     claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
     get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
-    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range,
-    index_employee_stream, index_employer_stream, index_stream_by_timestamp, load_stream, next_id,
-    remove_auto_topup, save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, get_token_streams,
+    index_employee_stream, index_employer_stream, index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
+    receipt_owner, remove_auto_topup, save_stream, save_template, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
+    set_pending_admin_nonce, set_pending_upgrade, set_receipt_owner, get_template_ids, TIMELOCK_DELAY,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
@@ -30,6 +31,7 @@ use types::{
     ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
     ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
     ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
+    ERR_NOT_RECEIPT_OWNER, ERR_TEMPLATE_NOT_FOUND,
     MAX_BATCH_SIZE,
 };
 use validate::{validate_create_stream, validate_rate, validate_top_up};
@@ -1762,5 +1764,96 @@ impl StreamContract {
     /// `u64` count; 0 if the token has no streams.
     pub fn stream_count_by_token(env: Env, token: Address) -> u64 {
         get_token_streams(&env, &token).len() as u64
+    }
+
+    /// Compute a health score for a stream (0–100).
+    ///
+    /// Returns a quick at-a-glance indicator of stream health:
+    /// - **0** = Critical (cancelled, exhausted, or nearly depleted)
+    /// - **50** = At-risk (approaching low balance threshold or paused)
+    /// - **100** = Healthy (active with substantial runway)
+    ///
+    /// The score factors in:
+    /// 1. **Status**: Cancelled/Exhausted streams score 0. Paused streams score ≤ 50.
+    /// 2. **Time to exhaustion**: Compares remaining deposit against a 30-day burn rate.
+    /// 3. **Low balance proximity**: Distance to the configured `low_balance_threshold`.
+    ///
+    /// No authorization is required. The function never panics; returns 0 for
+    /// cancelled or exhausted streams.
+    ///
+    /// # Parameters
+    /// - `stream_id` — the stream to score
+    ///
+    /// # Returns
+    /// A `u32` in the range [0, 100] representing health. Returns 0 if the stream
+    /// is not found (treated as critical).
+    pub fn stream_health_score(env: Env, stream_id: u64) -> u32 {
+        let stream = match load_stream(&env, stream_id) {
+            Some(s) => s,
+            None => return 0, // Stream not found
+        };
+
+        // Cancelled or Exhausted streams are critical
+        match stream.status {
+            StreamStatus::Cancelled | StreamStatus::Exhausted => return 0,
+            StreamStatus::Paused => {
+                // Paused streams start at 50 (at-risk) and degrade based on remaining deposit
+                let remaining = stream.deposit - stream.withdrawn;
+                if remaining <= 0 {
+                    return 0;
+                }
+                // Scale towards 50 based on proximity to low balance threshold
+                if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold {
+                    return 25;
+                }
+                return 50;
+            }
+            StreamStatus::Active => {}
+        }
+
+        // For Active streams: compute time to exhaustion vs. 30-day burn
+        let remaining = stream.deposit - stream.withdrawn;
+        if remaining <= 0 {
+            return 0;
+        }
+
+        // Calculate 30-day burn rate: rate_per_second * 86400 * 30 seconds
+        let thirty_day_burn = match stream.rate_per_second.checked_mul(86400 * 30) {
+            Some(burn) => burn,
+            None => return 100, // Overflow? Conservative: assume healthy
+        };
+
+        // If burn rate is 0 or negative, the stream won't exhaust (infinite runway)
+        if thirty_day_burn <= 0 {
+            return 100;
+        }
+
+        // Calculate runway in 30-day periods
+        let runway_periods = remaining / thirty_day_burn;
+
+        // Score based on runway:
+        // - < 0.1 periods (3 days): Score 0–20 (critical)
+        // - 0.1–1.0 periods (3–30 days): Score 20–50 (at-risk)
+        // - 1.0–10.0 periods (1–10 months): Score 50–90 (warning to healthy)
+        // - > 10.0 periods (>10 months): Score 90–100 (very healthy)
+        let score = if runway_periods < 1 {
+            // Less than one 30-day period
+            let ratio = (runway_periods * 200).min(20); // Map [0, 1) to [0, 20]
+            ratio as u32
+        } else if runway_periods < 10 {
+            // 1–10 periods: scale 50–90
+            let ratio = 50 + ((runway_periods - 1.0) * 4.44).min(40.0); // Map [1, 10) to [50, 90)
+            ratio as u32
+        } else {
+            90 + (((runway_periods - 10.0) / 10.0) * 10.0).min(10.0) as u32 // Map [10, ∞) to [90, 100]
+        };
+
+        // Apply low balance threshold penalty
+        if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold * 2 {
+            // Halve the score if approaching the low balance threshold
+            return (score / 2).max(1);
+        }
+
+        score.min(100)
     }
 }
