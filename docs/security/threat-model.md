@@ -105,7 +105,93 @@ PayStream streams salary from an employer to an employee in real-time on the Ste
 
 ---
 
-## 4. Residual Risks
+## 4. Auto Top-Up Threat Analysis (SEC-26 / issue #264)
+
+The auto top-up feature (`set_auto_topup`, `cancel_auto_topup`, `maybe_auto_topup`) introduces
+a new trust surface: the employer pre-approves the stream contract as a `transfer_from` spender
+for up to `max_total` tokens. After each `withdraw`, the contract autonomously pulls funds from
+the employer's token account when the remaining balance falls below `trigger_threshold`.
+
+### 4.1 New Attack Surface
+
+```
+Employer account  ──(pre-approved allowance)──▶  StreamContract
+                                                      │
+                                                      │ transfer_from on withdraw
+                                                      ▼
+                                                Employee account
+```
+
+Any actor that can manipulate the contract's auto top-up state (trigger, amount, cap) could
+cause the contract to drain more from the employer than intended, or cause it to never top up
+(locking employee earnings).
+
+### 4.2 STRIDE Threats — Auto Top-Up
+
+#### Spoofing
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-S-01 | Attacker impersonates employer to configure or cancel auto top-up | `set_auto_topup`, `cancel_auto_topup` | `employer.require_auth()` + `assert_eq!(stream.employer, employer)` — only the stream's actual employer can set or revoke config |
+
+#### Tampering
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-T-01 | **Malicious cap manipulation** — attacker raises `max_total` to drain employer allowance beyond the intended cap | `set_auto_topup` | Config is only writable by the authenticated employer; `max_total` is stored per-stream and capped to the employer's own intent. Employers should set token allowance ≤ `max_total`. |
+| AT-T-02 | **Allowance drain** — employer's token approval is higher than `max_total`; contract pulls more than intended if `total_topped_up` accounting is corrupted | `maybe_auto_topup` | `amount = topup_amount.min(max_total - total_topped_up)` — running total is tracked and the delta is capped. `total_topped_up` is only written inside `set_auto_topup` and `maybe_auto_topup`; both require the stream to be loaded and saved atomically. |
+| AT-T-03 | Replay of a cancelled auto top-up configuration | `cancel_auto_topup`, `set_auto_topup` | `cancel_auto_topup` calls `remove_auto_topup` which deletes the key; re-enabling requires a fresh `set_auto_topup` call from the employer |
+
+#### Repudiation
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-R-01 | Employer denies enabling auto top-up | `set_auto_topup` | `auto_topup_set(stream_id, true)` event emitted on-chain |
+| AT-R-02 | Employer denies a top-up transfer occurred | `maybe_auto_topup` | `auto_topped_up(stream_id, amount, total_topped_up)` event emitted after each successful pull |
+
+#### Information Disclosure
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-I-01 | Auto top-up config (trigger, amount, cap) is visible to all | `get_auto_topup_config` | Accepted: Stellar is a public ledger. Employers should treat their top-up strategy as public. |
+
+#### Denial of Service
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-D-01 | **`stop_time` bypass** — auto top-up fires after `stop_time` has passed, extending a stream that should have ended | `maybe_auto_topup` | `if stream.stop_time > 0 && now >= stream.stop_time { return; }` — top-up is skipped when stop_time is reached |
+| AT-D-02 | Attacker cancels employer's auto top-up to starve the stream | `cancel_auto_topup` | Only the authenticated employer can cancel; employee has no access |
+| AT-D-03 | Insufficient employer token balance causes `transfer_from` to fail and silently skip the top-up | `maybe_auto_topup` | `try_transfer_from` is used; failure returns early without reverting the withdraw so the employee still receives their earned funds |
+
+#### Elevation of Privilege
+
+| ID | Threat | Affected Function | Mitigation |
+|---|---|---|---|
+| AT-E-01 | Employee triggers auto top-up to exceed `max_total` cap | `maybe_auto_topup` (called from `withdraw`) | Cap is enforced: `amount = topup_amount.min(max_total - total_topped_up)`; once `total_topped_up >= max_total` the amount is 0 and the top-up is skipped |
+| AT-E-02 | Recursive top-up: `maybe_auto_topup` calls `transfer_from` which re-enters `withdraw` | `maybe_auto_topup` | `stream.locked = true` set before `token::transfer`; a re-entrant `withdraw` call panics with E003. Additionally, `maybe_auto_topup` does not call `withdraw` — it calls `transfer_from` directly. |
+
+### 4.3 Mitigations Summary
+
+| Mitigation | Where Enforced |
+|---|---|
+| **Cap enforcement** (`max_total`) | `maybe_auto_topup`: `amount = topup_amount.min(max_total - total_topped_up)` |
+| **`stop_time` check** | `maybe_auto_topup`: early return if `now >= stream.stop_time` |
+| **Allowance check** (non-reverting) | `maybe_auto_topup`: `try_transfer_from` returns without panic if allowance/balance is insufficient |
+| **Auth on config writes** | `set_auto_topup` / `cancel_auto_topup`: `employer.require_auth()` + stream ownership check |
+| **Reentrancy guard** | `maybe_auto_topup` is called while `stream.locked = true` from `withdraw` / `withdraw_all` |
+| **Event trail** | `auto_topup_set`, `auto_topped_up` events for auditability |
+
+### 4.4 Residual Risks — Auto Top-Up
+
+| ID | Risk | Likelihood | Impact | Notes |
+|---|---|---|---|---|
+| AT-RR-01 | Employer sets token allowance >> `max_total` | Medium | Medium | Not a contract bug — employers must set allowance ≤ `max_total`. Documented in API reference. |
+| AT-RR-02 | Employer's account is compromised; attacker replaces auto top-up config with a large `max_total` | Low | High | Mitigated by the same admin key rotation procedure; see `docs/security/key-rotation.md` |
+| AT-RR-03 | `trigger_threshold` set very high causes constant top-ups, draining `max_total` rapidly | Low | Low | Employer controls all three parameters; no third party can change them |
+
+---
+
+## 5. Residual Risks
 
 | ID | Risk | Likelihood | Impact | Notes |
 |---|---|---|---|---|
@@ -116,7 +202,7 @@ PayStream streams salary from an employer to an employee in real-time on the Ste
 
 ---
 
-## 5. Security Controls Summary
+## 6. Security Controls Summary
 
 | Control | Issue | Implementation |
 |---|---|---|
@@ -128,10 +214,12 @@ PayStream streams salary from an employer to an employee in real-time on the Ste
 | Auth enforcement | Pre-existing | `require_auth()` on every state-mutating entry point |
 | On-chain event log | Pre-existing | All state changes emit events for auditability |
 | Emergency drain (planned) | #32 (SEC-03) | `propose_emergency_drain` + `emergency_drain` two-step; requires contract paused; see `docs/security/emergency-drain.md` |
+| Auto top-up cap + stop_time guard | #264 (SEC-26) | `maybe_auto_topup` enforces `max_total` cap and skips after `stop_time`; see Section 4 |
+| Rate-limit on stream creation | #262 (SEC-24) | `check_and_increment_create_rate` in `lib.rs`; `set_max_creates_per_ledger` admin function |
 
 ---
 
-## 6. Out of Scope
+## 7. Out of Scope
 
 - Stellar validator security and consensus
 - Key management practices for the admin keypair
