@@ -57,6 +57,15 @@ pub struct StreamParams {
     pub stop_time: u64,
 }
 
+/// Single beneficiary in a split stream, with their share in basis points.
+/// 100 basis points = 1%.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitBeneficiary {
+    pub address: Address,
+    pub basis_points: u32,  // 0-10000, where 10000 = 100%
+}
+
 /// Configuration for recurring stream auto top-up.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]

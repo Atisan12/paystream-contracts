@@ -34,7 +34,7 @@ use types::{
     ERR_NOT_RECEIPT_OWNER, ERR_TEMPLATE_NOT_FOUND,
     MAX_BATCH_SIZE,
 };
-use validate::{validate_create_stream, validate_rate, validate_top_up};
+use validate::{validate_create_stream, validate_rate, validate_split_beneficiaries, validate_top_up};
 
 fn get_paused(env: &Env) -> bool {
     env.storage()
@@ -425,6 +425,106 @@ impl StreamContract {
         }
 
         ids
+    }
+
+    /// Create a multi-beneficiary stream that splits earnings across multiple recipients (PROD-22).
+    ///
+    /// The deposit is locked on-chain and accrues at the specified rate per second.
+    /// When withdrawn, earnings are split among beneficiaries according to their
+    /// basis points allocation (e.g., 5000 basis points = 50% of earnings).
+    ///
+    /// # Parameters
+    /// - `employer` — stream owner who deposits funds (requires auth)
+    /// - `token` — token contract address (SEP-41 or SAC)
+    /// - `deposit` — total tokens to lock (must be > 0 and >= minimum)
+    /// - `rate_per_second` — tokens accrued per second (must be > 0)
+    /// - `stop_time` — optional hard stop timestamp (0 = no limit; if set, must be in future)
+    /// - `beneficiaries` — recipients and their earnings split; must have 2-20 entries with basis points summing to 10000
+    /// - `low_balance_threshold` — optional alert threshold (0 = disabled)
+    ///
+    /// # Returns
+    /// Stream ID as `u64`.
+    ///
+    /// # Errors
+    /// - Panics if contract is paused
+    /// - E007 if deposit < minimum
+    /// - E001 if rate_per_second ≤ 0
+    /// - E008 if rate_per_second exceeds maximum
+    /// - E022 if stop_time is set and in the past
+    /// - E031 if fewer than 2 beneficiaries
+    /// - E032 if more than 20 beneficiaries
+    /// - E030 if basis points do not sum to exactly 10000
+    pub fn create_split_stream(
+        env: Env,
+        employer: Address,
+        token: Address,
+        deposit: i128,
+        rate_per_second: i128,
+        stop_time: u64,
+        beneficiaries: Vec<SplitBeneficiary>,
+        low_balance_threshold: Option<i128>,
+    ) -> u64 {
+        employer.require_auth();
+        assert!(!get_paused(&env), "{}", ERR_CONTRACT_PAUSED);
+
+        let now = env.ledger().timestamp();
+        let min_deposit = get_min_deposit(&env);
+
+        // Validate the base stream parameters
+        assert!(deposit > 0, "{}", ERR_ZERO_DEPOSIT);
+        assert!(deposit >= min_deposit, "{}", ERR_BELOW_MIN_DEPOSIT);
+        assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
+        assert!(
+            rate_per_second <= validate::MAX_RATE_PER_SECOND,
+            "{}",
+            ERR_INVALID_RATE
+        );
+        if stop_time > 0 {
+            assert!(stop_time > now, "{}", ERR_STOP_TIME_PAST);
+        }
+
+        // Validate beneficiary configuration
+        validate_split_beneficiaries(&beneficiaries);
+
+        // Transfer deposit from employer to contract
+        let this = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&employer, &this, &deposit);
+
+        // Create the stream with the first beneficiary as the nominal employee
+        // (used for event emission and historical compatibility)
+        let first_beneficiary = beneficiaries.get(0).expect("beneficiary missing");
+        let stream_id = next_id(&env);
+        let stream = Stream {
+            id: stream_id,
+            employer: employer.clone(),
+            employee: first_beneficiary.address.clone(),
+            token: token.clone(),
+            deposit,
+            withdrawn: 0,
+            rate_per_second,
+            start_time: now,
+            stop_time,
+            last_withdraw_time: now,
+            status: StreamStatus::Active,
+            pending_accrual: 0,
+            locked: false,
+            low_balance_threshold: low_balance_threshold.unwrap_or(0),
+        };
+
+        save_stream(&env, &stream);
+        set_split_beneficiaries(&env, stream_id, &beneficiaries);
+        index_employer_stream(&env, &employer, stream_id);
+        index_token_stream(&env, &token, stream_id);
+        index_stream_by_timestamp(&env, now, stream_id);
+
+        // Index all beneficiaries so they can query their streams
+        for benef in beneficiaries.iter() {
+            index_employee_stream(&env, &benef.address, stream_id);
+        }
+
+        events::split_stream_created(&env, stream_id, &employer, rate_per_second);
+        stream_id
     }
 
     /// Employee withdraws all claimable tokens earned so far.
@@ -1359,6 +1459,41 @@ impl StreamContract {
     pub fn claimable_at(env: Env, stream_id: u64, timestamp: u64) -> i128 {
         let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         claimable_amount(&stream, timestamp)
+    }
+
+    /// Check if a stream's remaining deposit is below the low-balance threshold.
+    /// Anyone can call this function to emit an on-demand low-balance alert (PROD-21).
+    ///
+    /// If the stream has a configured `low_balance_threshold` and the remaining
+    /// deposit (total deposit minus already withdrawn) falls below that threshold,
+    /// emits a `low_bal` event. This allows keeper bots to trigger alerts without
+    /// waiting for an employee withdrawal.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to check
+    ///
+    /// # Returns
+    /// `true` if the threshold was breached (remaining < threshold), `false` otherwise.
+    /// Returns `false` if no threshold is configured (threshold = 0).
+    ///
+    /// # Errors
+    /// - E015 if stream not found
+    pub fn check_low_balance(env: Env, stream_id: u64) -> bool {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        
+        // No threshold configured
+        if stream.low_balance_threshold == 0 {
+            return false;
+        }
+        
+        let remaining = stream.deposit - stream.withdrawn;
+        let threshold_breached = remaining < stream.low_balance_threshold;
+        
+        if threshold_breached {
+            events::low_balance_check(&env, stream_id, &stream.employer, remaining, stream.low_balance_threshold);
+        }
+        
+        threshold_breached
     }
 
     /// Return the current holder of the stream's receipt (PROD-01).
