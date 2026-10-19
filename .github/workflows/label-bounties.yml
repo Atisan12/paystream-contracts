@@ -1,0 +1,29 @@
+name: Update Bounty Labels
+
+on:
+  push:
+    paths:
+      - docs/bounties.md
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  label-bounties:
+    name: Apply Bounty Labels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update bounty issue labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Make script executable
+          chmod +x scripts/label-good-first-issues.sh
+          
+          # Run the labeling script
+          ./scripts/label-good-first-issues.sh

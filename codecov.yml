@@ -1,0 +1,51 @@
+# Codecov configuration for PayStream Contracts
+# https://docs.codecov.com/docs/codecov-yaml
+#
+# Coverage gate:
+#   - patch: 80% of new lines in a PR must be covered by tests.
+#     CI fails if a PR reduces patch coverage below this threshold.
+#   - project: informational only — no hard block on project-level changes.
+#
+# Rationale: enforcing patch coverage rather than project coverage ensures
+# that every new feature or bug-fix ships with adequate test coverage without
+# requiring a full-project coverage gate that penalises legacy uncovered code.
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    patch:
+      default:
+        # Minimum patch coverage for any PR touching the codebase.
+        target: 80%
+        threshold: 0%
+        # Do not block on Codecov upload errors; test failures should gate CI.
+        if_ci_failed: success
+        informational: false
+
+    project:
+      default:
+        # Project-level coverage is tracked but not enforced as a hard gate.
+        target: auto
+        threshold: 1%
+        informational: true
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+# Ignore generated, vendored, and infrastructure files.
+ignore:
+  - "target/**"
+  - "**/*.json"
+  - "scripts/**"
+  - "docs/**"
+  - "audits/**"
+  - "benchmarks/**"
+  - "tests/integration/**"
+  - "contracts/stream/fuzz/**"
