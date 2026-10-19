@@ -117,9 +117,35 @@ pub fn threshold_updated(env: &Env, stream_id: u64, old_threshold: i128, new_thr
     );
 }
 
+/// Emitted by `check_low_balance` when the remaining deposit is below the threshold.
+/// On-demand alert mechanism for keeper bots.
+pub fn low_balance_check(env: &Env, id: u64, employer: &Address, remaining: i128, threshold: i128) {
+    env.events().publish(
+        (symbol_short!("low_bal"), id),
+        (employer.clone(), remaining, threshold),
+    );
+}
 
-/// Emitted when `set_max_creates_per_ledger` updates the per-ledger stream creation cap.
-pub fn max_creates_per_ledger_updated(env: &Env, max: u32) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("rl_upd"),), max);
+/// Emitted by `create_split_stream` when creating a multi-beneficiary stream (PROD-22).
+pub fn split_stream_created(env: &Env, id: u64, employer: &Address, rate: i128) {
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("split"), id),
+        (employer.clone(), rate),
+    );
+}
+
+/// Emitted by `emit_platform_stats` to provide periodic analytics checkpoints (PROD-23).
+/// Enables efficient indexing of aggregated metrics without full ledger scans.
+pub fn platform_stats(
+    env: &Env,
+    timestamp: u64,
+    total_streams: u64,
+    total_deposit_locked: i128,
+    total_withdrawn: i128,
+    active_streams: u64,
+) {
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("p_stats")),
+        (timestamp, total_streams, total_deposit_locked, total_withdrawn, active_streams),
+    );
 }

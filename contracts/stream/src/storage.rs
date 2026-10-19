@@ -249,6 +249,41 @@ pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
     ids
 }
 
+/// Append `stream_id` to the token's stream index.
+/// Called once per `create_stream`; O(1) amortised — no full scan.
+pub fn index_token_stream(env: &Env, token: &Address, stream_id: u64) {
+    let key = DataKey::TokenStreams(token.clone());
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Return all stream IDs funded with `token`.
+///
+/// Extends TTL on read (matching the `load_stream` pattern) so that the index
+/// does not expire for tokens with long-running streams.
+pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
+    let key = DataKey::TokenStreams(token.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}
+
 pub fn get_auto_topup(env: &Env, stream_id: u64) -> Option<AutoTopupConfig> {
     let key = DataKey::AutoTopup(stream_id);
     let config: Option<AutoTopupConfig> = env.storage().persistent().get(&key);
@@ -391,87 +426,81 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// Stream creation rate-limit helpers (SEC-24 / issue #262)
+// Receipt owner helpers (PROD-01)
 // ---------------------------------------------------------------------------
 
-/// Return the admin-configured maximum number of streams an employer may
-/// create in a single ledger.  Defaults to [`DEFAULT_MAX_CREATES_PER_LEDGER`]
-/// (50) if never set.
-pub fn get_max_creates_per_ledger(env: &Env) -> u32 {
+/// Return the current holder of a stream's receipt.
+/// Falls back to the stream's original employee if no receipt owner has been set
+/// (for backward compatibility with streams created before receipt functionality).
+pub fn receipt_owner(env: &Env, stream: &Stream) -> Address {
+    let key = DataKey::ReceiptOwner(stream.id);
     env.storage()
-        .instance()
-        .get(&DataKey::MaxCreatesPerLedger)
-        .unwrap_or(DEFAULT_MAX_CREATES_PER_LEDGER)
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| stream.employee.clone())
 }
 
-/// Persist a new value for the per-ledger stream creation cap.
-pub fn set_max_creates_per_ledger(env: &Env, max: u32) {
+/// Set the receipt owner for a stream.
+pub fn set_receipt_owner(env: &Env, stream_id: u64, owner: &Address) {
+    let key = DataKey::ReceiptOwner(stream_id);
+    env.storage().persistent().set(&key, owner);
     env.storage()
-        .instance()
-        .set(&DataKey::MaxCreatesPerLedger, &max);
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
-/// Enforce the per-employer, per-ledger rate limit and increment the counter.
-///
-/// The function reads the last ledger sequence stored for `employer`.  If it
-/// matches the current ledger the existing count is used; otherwise (new ledger
-/// or first call) the count resets to 0.  It then asserts `count + delta <=
-/// max` before writing the updated count back to temporary storage.
-///
-/// Both keys are stored in **temporary** storage so they automatically expire
-/// after one ledger and never accumulate persistent storage rent.
-///
-/// # Parameters
-/// - `env` — Soroban environment
-/// - `employer` — address being rate-limited
-/// - `delta` — number of streams being created in this call (1 for
-///   `create_stream`, `params.len()` for `create_streams_batch`)
-///
-/// # Panics
-/// - E030 if `count + delta > max`
-pub fn check_and_increment_create_rate(env: &Env, employer: &Address, delta: u32) {
-    let current_ledger = env.ledger().sequence();
-    let max = get_max_creates_per_ledger(env);
+// ---------------------------------------------------------------------------
+// Stream template helpers (PROD-03)
+// ---------------------------------------------------------------------------
 
-    let last_ledger: u32 = env
+/// Return the list of template IDs saved by `employer`.
+pub fn get_template_ids(env: &Env, employer: &Address) -> Vec<u32> {
+    let key = DataKey::TemplateIds(employer.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Add a template ID to `employer`'s list (if not already present).
+fn index_template(env: &Env, employer: &Address, template_id: u32) {
+    let key = DataKey::TemplateIds(employer.clone());
+    let mut ids: Vec<u32> = env
         .storage()
-        .temporary()
-        .get(&DataKey::LastCreateLedger(employer.clone()))
-        .unwrap_or(0);
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    // Check if already present
+    for id in ids.iter() {
+        if id == template_id {
+            return; // Already indexed
+        }
+    }
+    ids.push_back(template_id);
+    env.storage().persistent().set(&key, &ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
 
-    let count: u32 = if last_ledger == current_ledger {
+/// Save a stream template.
+pub fn save_template(env: &Env, employer: &Address, template_id: u32, params: &StreamParams) {
+    let key = DataKey::Template(employer.clone(), template_id);
+    env.storage().persistent().set(&key, params);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    index_template(env, employer, template_id);
+}
+
+/// Load a stream template.
+pub fn load_template(env: &Env, employer: &Address, template_id: u32) -> Option<StreamParams> {
+    let key = DataKey::Template(employer.clone(), template_id);
+    let params: Option<StreamParams> = env.storage().persistent().get(&key);
+    if params.is_some() {
         env.storage()
-            .temporary()
-            .get(&DataKey::CreateCountThisLedger(employer.clone()))
-            .unwrap_or(0)
-    } else {
-        // New ledger — the counter resets.
-        0
-    };
-
-    assert!(
-        count.saturating_add(delta) <= max,
-        "{}",
-        ERR_RATE_LIMIT_EXCEEDED
-    );
-
-    // Write back the updated ledger marker and count.  TTL of 2 ledgers is
-    // sufficient — the keys only need to survive until the next ledger closes.
-    let new_count = count + delta;
-    env.storage()
-        .temporary()
-        .set(&DataKey::LastCreateLedger(employer.clone()), &current_ledger);
-    env.storage()
-        .temporary()
-        .set(&DataKey::CreateCountThisLedger(employer.clone()), &new_count);
-    env.storage().temporary().extend_ttl(
-        &DataKey::LastCreateLedger(employer.clone()),
-        2,
-        2,
-    );
-    env.storage().temporary().extend_ttl(
-        &DataKey::CreateCountThisLedger(employer.clone()),
-        2,
-        2,
-    );
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    params
 }

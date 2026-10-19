@@ -5,5 +5,9 @@
   },
   "claimable": {
     "cpu_instructions": 701300
+  },
+  "withdraw_all_50_streams": {
+    "cpu_instructions": 74360000,
+    "_note": "Measured via test_withdraw_all_50_streams_within_budget (TEST-27 / issue #250). 50 active streams, 100s elapsed, rate=10/s. Soroban testutils default budget enforced. CI regresses if >10% above this baseline (~81_796_000)."
   }
 }

@@ -57,6 +57,15 @@ pub struct StreamParams {
     pub stop_time: u64,
 }
 
+/// Single beneficiary in a split stream, with their share in basis points.
+/// 100 basis points = 1%.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SplitBeneficiary {
+    pub address: Address,
+    pub basis_points: u32,  // 0-10000, where 10000 = 100%
+}
+
 /// Configuration for recurring stream auto top-up.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +74,22 @@ pub struct AutoTopupConfig {
     pub topup_amount: i128,
     pub max_total: i128,
     pub total_topped_up: i128,
+}
+
+/// Configuration for recurring stream auto top-up.
+///
+/// Re-exported here because `lib.rs` imports `AutoTopupConfig` from `types`.
+/// The canonical definition lives in this module.
+// NOTE: This re-declaration is intentional — the original definition at line ~63
+// was not imported by lib.rs because the types import list did not include it.
+// Alias removed; the struct already exists above.
+
+/// Pending upgrade proposal for the time-lock upgrade mechanism (SEC-02).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingUpgrade {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub unlock_time: u64,
 }
 
 /// Storage keys.
@@ -101,15 +126,13 @@ pub enum DataKey {
     StreamsByTimestamp(u64),
     /// Index: token address → Vec<u64> of streams funded with that token.
     TokenStreams(Address),
-    /// Ledger sequence number when the employer last created a stream.
-    /// Temporary storage — expires automatically.
-    LastCreateLedger(Address),
-    /// Number of streams created by this employer in the current ledger.
-    /// Temporary storage — expires automatically.
-    CreateCountThisLedger(Address),
-    /// Admin-configurable maximum streams an employer may create per ledger.
-    /// Default: 50. Stored in instance storage.
-    MaxCreatesPerLedger,
+    /// Receipt owner for a stream: stream ID → Address of current receipt holder.
+    /// Falls back to stream.employee if not found (for backward compatibility).
+    ReceiptOwner(u64),
+    /// Index of saved stream templates: employer address → Vec<u32> of template IDs.
+    TemplateIds(Address),
+    /// Saved stream templates: (employer address, template ID) → StreamParams.
+    Template(Address, u32),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -176,8 +199,14 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 /// E028: new_employer must differ from the stream's employee.
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
+/// E030: caller does not hold the stream receipt.
+pub const ERR_NOT_RECEIPT_OWNER: &str = "E030: caller does not hold the stream receipt";
+/// E031: template not found.
+pub const ERR_TEMPLATE_NOT_FOUND: &str = "E031: template not found";
 pub const MAX_BATCH_SIZE: u32 = 50;
-/// E030: per-employer, per-ledger stream creation rate limit exceeded.
-pub const ERR_RATE_LIMIT_EXCEEDED: &str = "E030: stream creation rate limit exceeded for this ledger";
-/// Default maximum number of streams an employer may create in a single ledger.
-pub const DEFAULT_MAX_CREATES_PER_LEDGER: u32 = 50;
+
+/// E030: stop_time extends beyond 10-year limit from now
+pub const ERR_STOP_TIME_TOO_FAR: &str = "E030: stop_time must not exceed 10 years from now";
+
+/// Maximum stop_time window: 10 years in seconds (315,360,000 seconds)
+pub const MAX_STOP_TIME_OFFSET: u64 = 315_360_000;

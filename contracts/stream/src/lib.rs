@@ -5,6 +5,7 @@
 mod events;
 pub mod storage;
 pub mod types;
+pub mod utils;
 pub mod validate;
 
 #[cfg(test)]
@@ -17,23 +18,23 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Vec}
 /// storage and `version()` can be queried off-chain.
 pub const CONTRACT_VERSION: u32 = 1;
 use storage::{
-    check_and_increment_create_rate, claimable_amount, clear_pending_admin, clear_pending_upgrade,
-    consume_admin_nonce, get_admin, get_admin_nonce, get_auto_topup, get_employee_streams,
-    get_employer_streams, get_max_creates_per_ledger, get_min_deposit, get_pending_admin,
-    get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, index_employee_stream,
-    index_employer_stream, index_stream_by_timestamp, load_stream, next_id, remove_auto_topup,
-    save_stream, set_admin, set_auto_topup, set_max_creates_per_ledger as store_max_creates,
-    set_min_deposit, set_pending_admin, set_pending_admin_nonce, set_pending_upgrade, TIMELOCK_DELAY,
+    claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
+    get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
+    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, get_token_streams,
+    index_employee_stream, index_employer_stream, index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
+    receipt_owner, remove_auto_topup, save_stream, save_template, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
+    set_pending_admin_nonce, set_pending_upgrade, set_receipt_owner, get_template_ids, TIMELOCK_DELAY,
 };
 use types::{
     DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
     ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN,
     ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
-    ERR_RATE_LIMIT_EXCEEDED, ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED,
-    ERR_STREAM_EXHAUSTED, ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED,
-    ERR_ZERO_DEPOSIT, MAX_BATCH_SIZE,
+    ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
+    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
+    ERR_NOT_RECEIPT_OWNER, ERR_TEMPLATE_NOT_FOUND,
+    MAX_BATCH_SIZE,
 };
-use validate::{validate_create_stream, validate_rate, validate_top_up};
+use validate::{validate_create_stream, validate_rate, validate_split_beneficiaries, validate_top_up};
 
 fn get_paused(env: &Env) -> bool {
     env.storage()
@@ -457,6 +458,106 @@ impl StreamContract {
         ids
     }
 
+    /// Create a multi-beneficiary stream that splits earnings across multiple recipients (PROD-22).
+    ///
+    /// The deposit is locked on-chain and accrues at the specified rate per second.
+    /// When withdrawn, earnings are split among beneficiaries according to their
+    /// basis points allocation (e.g., 5000 basis points = 50% of earnings).
+    ///
+    /// # Parameters
+    /// - `employer` — stream owner who deposits funds (requires auth)
+    /// - `token` — token contract address (SEP-41 or SAC)
+    /// - `deposit` — total tokens to lock (must be > 0 and >= minimum)
+    /// - `rate_per_second` — tokens accrued per second (must be > 0)
+    /// - `stop_time` — optional hard stop timestamp (0 = no limit; if set, must be in future)
+    /// - `beneficiaries` — recipients and their earnings split; must have 2-20 entries with basis points summing to 10000
+    /// - `low_balance_threshold` — optional alert threshold (0 = disabled)
+    ///
+    /// # Returns
+    /// Stream ID as `u64`.
+    ///
+    /// # Errors
+    /// - Panics if contract is paused
+    /// - E007 if deposit < minimum
+    /// - E001 if rate_per_second ≤ 0
+    /// - E008 if rate_per_second exceeds maximum
+    /// - E022 if stop_time is set and in the past
+    /// - E031 if fewer than 2 beneficiaries
+    /// - E032 if more than 20 beneficiaries
+    /// - E030 if basis points do not sum to exactly 10000
+    pub fn create_split_stream(
+        env: Env,
+        employer: Address,
+        token: Address,
+        deposit: i128,
+        rate_per_second: i128,
+        stop_time: u64,
+        beneficiaries: Vec<SplitBeneficiary>,
+        low_balance_threshold: Option<i128>,
+    ) -> u64 {
+        employer.require_auth();
+        assert!(!get_paused(&env), "{}", ERR_CONTRACT_PAUSED);
+
+        let now = env.ledger().timestamp();
+        let min_deposit = get_min_deposit(&env);
+
+        // Validate the base stream parameters
+        assert!(deposit > 0, "{}", ERR_ZERO_DEPOSIT);
+        assert!(deposit >= min_deposit, "{}", ERR_BELOW_MIN_DEPOSIT);
+        assert!(rate_per_second > 0, "{}", ERR_ZERO_RATE);
+        assert!(
+            rate_per_second <= validate::MAX_RATE_PER_SECOND,
+            "{}",
+            ERR_INVALID_RATE
+        );
+        if stop_time > 0 {
+            assert!(stop_time > now, "{}", ERR_STOP_TIME_PAST);
+        }
+
+        // Validate beneficiary configuration
+        validate_split_beneficiaries(&beneficiaries);
+
+        // Transfer deposit from employer to contract
+        let this = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&employer, &this, &deposit);
+
+        // Create the stream with the first beneficiary as the nominal employee
+        // (used for event emission and historical compatibility)
+        let first_beneficiary = beneficiaries.get(0).expect("beneficiary missing");
+        let stream_id = next_id(&env);
+        let stream = Stream {
+            id: stream_id,
+            employer: employer.clone(),
+            employee: first_beneficiary.address.clone(),
+            token: token.clone(),
+            deposit,
+            withdrawn: 0,
+            rate_per_second,
+            start_time: now,
+            stop_time,
+            last_withdraw_time: now,
+            status: StreamStatus::Active,
+            pending_accrual: 0,
+            locked: false,
+            low_balance_threshold: low_balance_threshold.unwrap_or(0),
+        };
+
+        save_stream(&env, &stream);
+        set_split_beneficiaries(&env, stream_id, &beneficiaries);
+        index_employer_stream(&env, &employer, stream_id);
+        index_token_stream(&env, &token, stream_id);
+        index_stream_by_timestamp(&env, now, stream_id);
+
+        // Index all beneficiaries so they can query their streams
+        for benef in beneficiaries.iter() {
+            index_employee_stream(&env, &benef.address, stream_id);
+        }
+
+        events::split_stream_created(&env, stream_id, &employer, rate_per_second);
+        stream_id
+    }
+
     /// Employee withdraws all claimable tokens earned so far.
     ///
     /// Claimable amount is `min((now - last_withdraw_time) * rate_per_second, remaining_deposit)`.
@@ -572,6 +673,12 @@ impl StreamContract {
 
         let stream_ids = get_employee_streams(&env, &employee);
         let mut results: Vec<(u64, i128)> = Vec::new(&env);
+        
+        // Return empty results gracefully if employee has no streams
+        if stream_ids.is_empty() {
+            return results;
+        }
+
         let now = env.ledger().timestamp();
 
         for stream_id in stream_ids.iter() {
@@ -1186,7 +1293,8 @@ impl StreamContract {
         stream.locked = false;
         save_stream(&env, &stream);
         if amount > 0 {
-            events::withdrawn(&env, stream_id, &employee, amount);
+            let owner = receipt_owner(&env, &stream);
+            events::withdrawn(&env, stream_id, &owner, amount);
             let remaining = stream.deposit - stream.withdrawn;
             if stream.low_balance_threshold > 0 && remaining < stream.low_balance_threshold {
                 events::low_balance(
@@ -1384,6 +1492,41 @@ impl StreamContract {
         claimable_amount(&stream, timestamp)
     }
 
+    /// Check if a stream's remaining deposit is below the low-balance threshold.
+    /// Anyone can call this function to emit an on-demand low-balance alert (PROD-21).
+    ///
+    /// If the stream has a configured `low_balance_threshold` and the remaining
+    /// deposit (total deposit minus already withdrawn) falls below that threshold,
+    /// emits a `low_bal` event. This allows keeper bots to trigger alerts without
+    /// waiting for an employee withdrawal.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to check
+    ///
+    /// # Returns
+    /// `true` if the threshold was breached (remaining < threshold), `false` otherwise.
+    /// Returns `false` if no threshold is configured (threshold = 0).
+    ///
+    /// # Errors
+    /// - E015 if stream not found
+    pub fn check_low_balance(env: Env, stream_id: u64) -> bool {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+        
+        // No threshold configured
+        if stream.low_balance_threshold == 0 {
+            return false;
+        }
+        
+        let remaining = stream.deposit - stream.withdrawn;
+        let threshold_breached = remaining < stream.low_balance_threshold;
+        
+        if threshold_breached {
+            events::low_balance_check(&env, stream_id, &stream.employer, remaining, stream.low_balance_threshold);
+        }
+        
+        threshold_breached
+    }
+
     /// Return the current holder of the stream's receipt (PROD-01).
     ///
     /// The holder is the only address allowed to [`withdraw`] from the stream.
@@ -1457,6 +1600,7 @@ impl StreamContract {
             t.deposit,
             t.rate_per_second,
             t.stop_time,
+            None,
         )
     }
 
@@ -1794,5 +1938,96 @@ impl StreamContract {
     /// `u64` count; 0 if the token has no streams.
     pub fn stream_count_by_token(env: Env, token: Address) -> u64 {
         get_token_streams(&env, &token).len() as u64
+    }
+
+    /// Compute a health score for a stream (0–100).
+    ///
+    /// Returns a quick at-a-glance indicator of stream health:
+    /// - **0** = Critical (cancelled, exhausted, or nearly depleted)
+    /// - **50** = At-risk (approaching low balance threshold or paused)
+    /// - **100** = Healthy (active with substantial runway)
+    ///
+    /// The score factors in:
+    /// 1. **Status**: Cancelled/Exhausted streams score 0. Paused streams score ≤ 50.
+    /// 2. **Time to exhaustion**: Compares remaining deposit against a 30-day burn rate.
+    /// 3. **Low balance proximity**: Distance to the configured `low_balance_threshold`.
+    ///
+    /// No authorization is required. The function never panics; returns 0 for
+    /// cancelled or exhausted streams.
+    ///
+    /// # Parameters
+    /// - `stream_id` — the stream to score
+    ///
+    /// # Returns
+    /// A `u32` in the range [0, 100] representing health. Returns 0 if the stream
+    /// is not found (treated as critical).
+    pub fn stream_health_score(env: Env, stream_id: u64) -> u32 {
+        let stream = match load_stream(&env, stream_id) {
+            Some(s) => s,
+            None => return 0, // Stream not found
+        };
+
+        // Cancelled or Exhausted streams are critical
+        match stream.status {
+            StreamStatus::Cancelled | StreamStatus::Exhausted => return 0,
+            StreamStatus::Paused => {
+                // Paused streams start at 50 (at-risk) and degrade based on remaining deposit
+                let remaining = stream.deposit - stream.withdrawn;
+                if remaining <= 0 {
+                    return 0;
+                }
+                // Scale towards 50 based on proximity to low balance threshold
+                if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold {
+                    return 25;
+                }
+                return 50;
+            }
+            StreamStatus::Active => {}
+        }
+
+        // For Active streams: compute time to exhaustion vs. 30-day burn
+        let remaining = stream.deposit - stream.withdrawn;
+        if remaining <= 0 {
+            return 0;
+        }
+
+        // Calculate 30-day burn rate: rate_per_second * 86400 * 30 seconds
+        let thirty_day_burn = match stream.rate_per_second.checked_mul(86400 * 30) {
+            Some(burn) => burn,
+            None => return 100, // Overflow? Conservative: assume healthy
+        };
+
+        // If burn rate is 0 or negative, the stream won't exhaust (infinite runway)
+        if thirty_day_burn <= 0 {
+            return 100;
+        }
+
+        // Calculate runway in 30-day periods
+        let runway_periods = remaining / thirty_day_burn;
+
+        // Score based on runway:
+        // - < 0.1 periods (3 days): Score 0–20 (critical)
+        // - 0.1–1.0 periods (3–30 days): Score 20–50 (at-risk)
+        // - 1.0–10.0 periods (1–10 months): Score 50–90 (warning to healthy)
+        // - > 10.0 periods (>10 months): Score 90–100 (very healthy)
+        let score = if runway_periods < 1 {
+            // Less than one 30-day period
+            let ratio = (runway_periods * 200).min(20); // Map [0, 1) to [0, 20]
+            ratio as u32
+        } else if runway_periods < 10 {
+            // 1–10 periods: scale 50–90
+            let ratio = 50 + ((runway_periods - 1.0) * 4.44).min(40.0); // Map [1, 10) to [50, 90)
+            ratio as u32
+        } else {
+            90 + (((runway_periods - 10.0) / 10.0) * 10.0).min(10.0) as u32 // Map [10, ∞) to [90, 100]
+        };
+
+        // Apply low balance threshold penalty
+        if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold * 2 {
+            // Halve the score if approaching the low balance threshold
+            return (score / 2).max(1);
+        }
+
+        score.min(100)
     }
 }
