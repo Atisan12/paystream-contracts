@@ -249,6 +249,41 @@ pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
     ids
 }
 
+/// Append `stream_id` to the token's stream index.
+/// Called once per `create_stream`; O(1) amortised — no full scan.
+pub fn index_token_stream(env: &Env, token: &Address, stream_id: u64) {
+    let key = DataKey::TokenStreams(token.clone());
+    let mut ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(stream_id);
+    env.storage().persistent().set(&key, &ids);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Return all stream IDs funded with `token`.
+///
+/// Extends TTL on read (matching the `load_stream` pattern) so that the index
+/// does not expire for tokens with long-running streams.
+pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
+    let key = DataKey::TokenStreams(token.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}
+
 pub fn get_auto_topup(env: &Env, stream_id: u64) -> Option<AutoTopupConfig> {
     let key = DataKey::AutoTopup(stream_id);
     let config: Option<AutoTopupConfig> = env.storage().persistent().get(&key);
@@ -390,65 +425,82 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
     result
 }
 
-
 // ---------------------------------------------------------------------------
-// Split stream beneficiary helpers (PROD-22)
+// Receipt owner helpers (PROD-01)
 // ---------------------------------------------------------------------------
 
-/// Store the beneficiary configuration for a split stream.
-pub fn set_split_beneficiaries(env: &Env, stream_id: u64, beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>) {
-    let key = DataKey::SplitBeneficiaries(stream_id);
-    env.storage().persistent().set(&key, beneficiaries);
+/// Return the current holder of a stream's receipt.
+/// Falls back to the stream's original employee if no receipt owner has been set
+/// (for backward compatibility with streams created before receipt functionality).
+pub fn receipt_owner(env: &Env, stream: &Stream) -> Address {
+    let key = DataKey::ReceiptOwner(stream.id);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| stream.employee.clone())
+}
+
+/// Set the receipt owner for a stream.
+pub fn set_receipt_owner(env: &Env, stream_id: u64, owner: &Address) {
+    let key = DataKey::ReceiptOwner(stream_id);
+    env.storage().persistent().set(&key, owner);
     env.storage()
         .persistent()
         .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
-/// Retrieve the beneficiary configuration for a split stream.
-pub fn get_split_beneficiaries(env: &Env, stream_id: u64) -> Option<soroban_sdk::Vec<crate::types::SplitBeneficiary>> {
-    let key = DataKey::SplitBeneficiaries(stream_id);
-    let beneficiaries: Option<soroban_sdk::Vec<crate::types::SplitBeneficiary>> = env.storage().persistent().get(&key);
-    if beneficiaries.is_some() {
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
-    }
-    beneficiaries
+// ---------------------------------------------------------------------------
+// Stream template helpers (PROD-03)
+// ---------------------------------------------------------------------------
+
+/// Return the list of template IDs saved by `employer`.
+pub fn get_template_ids(env: &Env, employer: &Address) -> Vec<u32> {
+    let key = DataKey::TemplateIds(employer.clone());
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
-
-// ---------------------------------------------------------------------------
-// Token stream index helpers
-// ---------------------------------------------------------------------------
-
-/// Append `stream_id` to the token's stream index.
-/// Called once per stream creation; O(1) amortised.
-pub fn index_token_stream(env: &Env, token: &Address, stream_id: u64) {
-    let key = DataKey::TokenStreams(token.clone());
-    let mut ids: Vec<u64> = env
+/// Add a template ID to `employer`'s list (if not already present).
+fn index_template(env: &Env, employer: &Address, template_id: u32) {
+    let key = DataKey::TemplateIds(employer.clone());
+    let mut ids: Vec<u32> = env
         .storage()
         .persistent()
         .get(&key)
         .unwrap_or_else(|| Vec::new(env));
-    ids.push_back(stream_id);
+    // Check if already present
+    for id in ids.iter() {
+        if id == template_id {
+            return; // Already indexed
+        }
+    }
+    ids.push_back(template_id);
     env.storage().persistent().set(&key, &ids);
     env.storage()
         .persistent()
         .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
-/// Return all stream IDs funded with the given token.
-pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
-    let key = DataKey::TokenStreams(token.clone());
-    let ids: Vec<u64> = env
-        .storage()
+/// Save a stream template.
+pub fn save_template(env: &Env, employer: &Address, template_id: u32, params: &StreamParams) {
+    let key = DataKey::Template(employer.clone(), template_id);
+    env.storage().persistent().set(&key, params);
+    env.storage()
         .persistent()
-        .get(&key)
-        .unwrap_or_else(|| Vec::new(env));
-    if env.storage().persistent().has(&key) {
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    index_template(env, employer, template_id);
+}
+
+/// Load a stream template.
+pub fn load_template(env: &Env, employer: &Address, template_id: u32) -> Option<StreamParams> {
+    let key = DataKey::Template(employer.clone(), template_id);
+    let params: Option<StreamParams> = env.storage().persistent().get(&key);
+    if params.is_some() {
         env.storage()
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
     }
-    ids
+    params
 }

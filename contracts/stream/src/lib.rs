@@ -5,6 +5,7 @@
 mod events;
 pub mod storage;
 pub mod types;
+pub mod utils;
 pub mod validate;
 
 #[cfg(test)]
@@ -19,19 +20,19 @@ pub const CONTRACT_VERSION: u32 = 1;
 use storage::{
     claimable_amount, clear_pending_admin, clear_pending_upgrade, consume_admin_nonce, get_admin,
     get_admin_nonce, get_auto_topup, get_employee_streams, get_employer_streams, get_min_deposit,
-    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_split_beneficiaries,
-    get_streams_in_range, get_token_streams, index_employee_stream, index_employer_stream,
-    index_stream_by_timestamp, index_token_stream, load_stream, next_id, remove_auto_topup,
-    save_stream, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
-    set_pending_admin_nonce, set_pending_upgrade, set_split_beneficiaries, TIMELOCK_DELAY,
+    get_pending_admin, get_pending_admin_nonce, get_pending_upgrade, get_streams_in_range, get_token_streams,
+    index_employee_stream, index_employer_stream, index_stream_by_timestamp, index_token_stream, load_stream, load_template, next_id,
+    receipt_owner, remove_auto_topup, save_stream, save_template, set_admin, set_auto_topup, set_min_deposit, set_pending_admin,
+    set_pending_admin_nonce, set_pending_upgrade, set_receipt_owner, get_template_ids, TIMELOCK_DELAY,
 };
 use types::{
-    DataKey, Stream, StreamParams, StreamStatus, SplitBeneficiary, ERR_ADMIN_NOT_SET,
-    ERR_BAD_PENDING_NONCE, ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS,
-    ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN, ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER,
-    ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW, ERR_REENTRANT,
-    ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED, ERR_STREAM_NOT_ACTIVE,
-    ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT, MAX_BATCH_SIZE,
+    DataKey, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_PENDING_NONCE,
+    ERR_BATCH_TOO_LARGE, ERR_CONTRACT_PAUSED, ERR_EMPTY_PARAMS, ERR_NEW_EMPLOYER_IS_EMPLOYEE, ERR_NOT_ADMIN,
+    ERR_NOT_EMPLOYEE, ERR_NOT_EMPLOYER, ERR_NOT_PENDING_ADMIN, ERR_NO_PENDING_ADMIN, ERR_OVERFLOW,
+    ERR_REENTRANT, ERR_STREAM_ALREADY_ENDED, ERR_STREAM_CANCELLED, ERR_STREAM_EXHAUSTED,
+    ERR_STREAM_NOT_ACTIVE, ERR_STREAM_NOT_FOUND, ERR_STREAM_NOT_PAUSED, ERR_ZERO_DEPOSIT,
+    ERR_NOT_RECEIPT_OWNER, ERR_TEMPLATE_NOT_FOUND,
+    MAX_BATCH_SIZE,
 };
 use validate::{validate_create_stream, validate_rate, validate_split_beneficiaries, validate_top_up};
 
@@ -641,6 +642,12 @@ impl StreamContract {
 
         let stream_ids = get_employee_streams(&env, &employee);
         let mut results: Vec<(u64, i128)> = Vec::new(&env);
+        
+        // Return empty results gracefully if employee has no streams
+        if stream_ids.is_empty() {
+            return results;
+        }
+
         let now = env.ledger().timestamp();
 
         for stream_id in stream_ids.iter() {
@@ -1255,7 +1262,8 @@ impl StreamContract {
         stream.locked = false;
         save_stream(&env, &stream);
         if amount > 0 {
-            events::withdrawn(&env, stream_id, &employee, amount);
+            let owner = receipt_owner(&env, &stream);
+            events::withdrawn(&env, stream_id, &owner, amount);
             let remaining = stream.deposit - stream.withdrawn;
             if stream.low_balance_threshold > 0 && remaining < stream.low_balance_threshold {
                 events::low_balance(
@@ -1561,6 +1569,7 @@ impl StreamContract {
             t.deposit,
             t.rate_per_second,
             t.stop_time,
+            None,
         )
     }
 
@@ -1900,48 +1909,94 @@ impl StreamContract {
         get_token_streams(&env, &token).len() as u64
     }
 
-    /// Emit aggregated platform statistics for indexing and analytics (PROD-23).
+    /// Compute a health score for a stream (0–100).
     ///
-    /// This function allows the admin to periodically emit checkpoints with
-    /// platform-wide metrics. Indexers subscribe to these events to build
-    /// aggregated views without scanning the entire ledger state. Called
-    /// on-demand by a keeper bot or admin; no automatic emission.
+    /// Returns a quick at-a-glance indicator of stream health:
+    /// - **0** = Critical (cancelled, exhausted, or nearly depleted)
+    /// - **50** = At-risk (approaching low balance threshold or paused)
+    /// - **100** = Healthy (active with substantial runway)
+    ///
+    /// The score factors in:
+    /// 1. **Status**: Cancelled/Exhausted streams score 0. Paused streams score ≤ 50.
+    /// 2. **Time to exhaustion**: Compares remaining deposit against a 30-day burn rate.
+    /// 3. **Low balance proximity**: Distance to the configured `low_balance_threshold`.
+    ///
+    /// No authorization is required. The function never panics; returns 0 for
+    /// cancelled or exhausted streams.
     ///
     /// # Parameters
-    /// - `admin` — contract admin (requires auth)
-    /// - `nonce` — admin nonce for replay protection (consumed)
-    /// - `total_deposit_locked` — sum of all stream deposits (not including auto top-ups)
-    /// - `total_withdrawn` — sum of all withdrawals across all streams
-    /// - `active_streams` — number of streams with status = Active
+    /// - `stream_id` — the stream to score
     ///
-    /// # Emits
-    /// `platform_stats` event with snapshot timestamp, totals, and active count.
-    ///
-    /// # Errors
-    /// - Panics if admin auth fails
-    /// - E009 if `nonce` does not match the stored admin nonce
-    pub fn emit_platform_stats(
-        env: Env,
-        admin: Address,
-        nonce: u64,
-        total_deposit_locked: i128,
-        total_withdrawn: i128,
-        active_streams: u64,
-    ) {
-        admin.require_auth();
-        consume_admin_nonce(&env, nonce);
-        let total_streams = env
-            .storage()
-            .instance()
-            .get(&DataKey::StreamCount)
-            .unwrap_or(0u64);
-        events::platform_stats(
-            &env,
-            env.ledger().timestamp(),
-            total_streams,
-            total_deposit_locked,
-            total_withdrawn,
-            active_streams,
-        );
+    /// # Returns
+    /// A `u32` in the range [0, 100] representing health. Returns 0 if the stream
+    /// is not found (treated as critical).
+    pub fn stream_health_score(env: Env, stream_id: u64) -> u32 {
+        let stream = match load_stream(&env, stream_id) {
+            Some(s) => s,
+            None => return 0, // Stream not found
+        };
+
+        // Cancelled or Exhausted streams are critical
+        match stream.status {
+            StreamStatus::Cancelled | StreamStatus::Exhausted => return 0,
+            StreamStatus::Paused => {
+                // Paused streams start at 50 (at-risk) and degrade based on remaining deposit
+                let remaining = stream.deposit - stream.withdrawn;
+                if remaining <= 0 {
+                    return 0;
+                }
+                // Scale towards 50 based on proximity to low balance threshold
+                if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold {
+                    return 25;
+                }
+                return 50;
+            }
+            StreamStatus::Active => {}
+        }
+
+        // For Active streams: compute time to exhaustion vs. 30-day burn
+        let remaining = stream.deposit - stream.withdrawn;
+        if remaining <= 0 {
+            return 0;
+        }
+
+        // Calculate 30-day burn rate: rate_per_second * 86400 * 30 seconds
+        let thirty_day_burn = match stream.rate_per_second.checked_mul(86400 * 30) {
+            Some(burn) => burn,
+            None => return 100, // Overflow? Conservative: assume healthy
+        };
+
+        // If burn rate is 0 or negative, the stream won't exhaust (infinite runway)
+        if thirty_day_burn <= 0 {
+            return 100;
+        }
+
+        // Calculate runway in 30-day periods
+        let runway_periods = remaining / thirty_day_burn;
+
+        // Score based on runway:
+        // - < 0.1 periods (3 days): Score 0–20 (critical)
+        // - 0.1–1.0 periods (3–30 days): Score 20–50 (at-risk)
+        // - 1.0–10.0 periods (1–10 months): Score 50–90 (warning to healthy)
+        // - > 10.0 periods (>10 months): Score 90–100 (very healthy)
+        let score = if runway_periods < 1 {
+            // Less than one 30-day period
+            let ratio = (runway_periods * 200).min(20); // Map [0, 1) to [0, 20]
+            ratio as u32
+        } else if runway_periods < 10 {
+            // 1–10 periods: scale 50–90
+            let ratio = 50 + ((runway_periods - 1.0) * 4.44).min(40.0); // Map [1, 10) to [50, 90)
+            ratio as u32
+        } else {
+            90 + (((runway_periods - 10.0) / 10.0) * 10.0).min(10.0) as u32 // Map [10, ∞) to [90, 100]
+        };
+
+        // Apply low balance threshold penalty
+        if stream.low_balance_threshold > 0 && remaining <= stream.low_balance_threshold * 2 {
+            // Halve the score if approaching the low balance threshold
+            return (score / 2).max(1);
+        }
+
+        score.min(100)
     }
 }
