@@ -496,6 +496,16 @@ make coverage      # print a per-file coverage summary
 
 Target baseline: **>90% line coverage** for `contracts/stream` and `contracts/token`. New code should not lower coverage.
 
+#### Codecov patch coverage gate (enforced in CI)
+
+A `codecov.yml` file at the repository root configures a **minimum 80% patch coverage** requirement. This means:
+
+- Every PR must have at least 80% of its **new and changed lines** covered by tests.
+- Codecov will post a status check on each PR. CI fails if the patch coverage falls below 80%.
+- The project-level coverage target is tracked for visibility but is **not** a hard gate (to avoid penalising PRs that touch legacy uncovered code).
+
+If your PR intentionally adds code that cannot be unit-tested (e.g., event-emission helpers, dead-code stubs, or wasm-only paths), document the gap in the PR description so reviewers can verify the `codecov.yml` ignore list or approve the exception.
+
 ### Mutation testing
 
 [`cargo-mutants`](https://mutants.rs) checks that tests actually assert on behaviour, not just execute code.
