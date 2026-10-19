@@ -117,15 +117,13 @@ pub enum DataKey {
     StreamsByTimestamp(u64),
     /// Index: token address → Vec<u64> of streams funded with that token.
     TokenStreams(Address),
-    /// Pending WASM upgrade proposal (SEC-02).
-    PendingUpgrade,
-    /// Receipt owner override: maps stream_id → Address when the receipt has
-    /// been transferred away from the original employee (PROD-01).
+    /// Receipt owner for a stream: stream ID → Address of current receipt holder.
+    /// Falls back to stream.employee if not found (for backward compatibility).
     ReceiptOwner(u64),
-    /// Stream template: (employer, template_id) → StreamParams (PROD-03).
-    Template(Address, u32),
-    /// Template ID list: employer → Vec<u32> of saved template IDs (PROD-03).
+    /// Index of saved stream templates: employer address → Vec<u32> of template IDs.
     TemplateIds(Address),
+    /// Saved stream templates: (employer address, template ID) → StreamParams.
+    Template(Address, u32),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -192,9 +190,14 @@ pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposa
 /// E028: new_employer must differ from the stream's employee.
 pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
+/// E030: caller does not hold the stream receipt.
+pub const ERR_NOT_RECEIPT_OWNER: &str = "E030: caller does not hold the stream receipt";
+/// E031: template not found.
+pub const ERR_TEMPLATE_NOT_FOUND: &str = "E031: template not found";
 pub const MAX_BATCH_SIZE: u32 = 50;
-pub const ERR_INVALID_AUTO_TOPUP: &str = "E030: invalid auto top-up parameters";
-pub const ERR_NO_AUTO_TOPUP: &str = "E031: no auto top-up configured for this stream";
-pub const ERR_NOT_RECEIPT_OWNER: &str = "E032: caller does not hold the stream receipt";
-pub const ERR_TEMPLATE_NOT_FOUND: &str = "E033: stream template not found";
-pub const ERR_UPGRADE_TIMELOCK_ACTIVE: &str = "E034: upgrade timelock has not yet expired";
+
+/// E030: stop_time extends beyond 10-year limit from now
+pub const ERR_STOP_TIME_TOO_FAR: &str = "E030: stop_time must not exceed 10 years from now";
+
+/// Maximum stop_time window: 10 years in seconds (315,360,000 seconds)
+pub const MAX_STOP_TIME_OFFSET: u64 = 315_360_000;
