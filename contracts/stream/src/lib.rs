@@ -542,6 +542,12 @@ impl StreamContract {
 
         let stream_ids = get_employee_streams(&env, &employee);
         let mut results: Vec<(u64, i128)> = Vec::new(&env);
+        
+        // Return empty results gracefully if employee has no streams
+        if stream_ids.is_empty() {
+            return results;
+        }
+
         let now = env.ledger().timestamp();
 
         for stream_id in stream_ids.iter() {
