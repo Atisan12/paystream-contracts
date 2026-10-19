@@ -25,3 +25,15 @@ path = "src/fuzz_create_stream.rs"
 [[bin]]
 name = "fuzz_admin_nonce"
 path = "src/fuzz_admin_nonce.rs"
+
+[[bin]]
+name = "fuzz_batch_create"
+path = "src/fuzz_batch_create.rs"
+
+[[bin]]
+name = "fuzz_batch_cancel"
+path = "src/fuzz_batch_cancel.rs"
+
+[[bin]]
+name = "prop_claimable_invariant"
+path = "src/prop_claimable_invariant.rs"

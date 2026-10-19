@@ -35,10 +35,17 @@ pub fn stream_status_changed(env: &Env, id: u64, status: &StreamStatus) {
 ///
 /// - `claimable_amount` — tokens paid to the employee at cancellation time
 /// - `refund_amount`    — tokens returned to the employer (unstreamed portion)
-pub fn stream_cancelled(env: &Env, id: u64, claimable_amount: i128, refund_amount: i128) {
+/// - `cancel_reason`   — optional employer-supplied reason symbol
+pub fn stream_cancelled(
+    env: &Env,
+    id: u64,
+    claimable_amount: i128,
+    refund_amount: i128,
+    cancel_reason: Option<soroban_sdk::Symbol>,
+) {
     env.events().publish(
         (symbol_short!("v1"), symbol_short!("cancelled"), id),
-        (claimable_amount, refund_amount),
+        (claimable_amount, refund_amount, cancel_reason),
     );
 }
 

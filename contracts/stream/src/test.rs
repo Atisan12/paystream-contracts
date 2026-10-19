@@ -179,7 +179,7 @@ fn test_cancel_linear_vest_refunds_unvested_grant() {
     );
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 40);
-    client.cancel_stream(&employer, &stream_id);
+    client.cancel_stream(&employer, &stream_id, &None);
 
     assert_eq!(token.balance(&employee), 4_000);
     assert_eq!(token.balance(&employer), employer_balance_before - 4_000);
@@ -335,7 +335,7 @@ fn test_claimable_batch_mixed_statuses_preserves_order() {
     client.pause_stream(&employer, &paused_id);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&exhausted_employee, &exhausted_id);
-    client.cancel_stream(&employer, &cancelled_id);
+    client.cancel_stream(&employer, &cancelled_id, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(cancelled_id);
@@ -436,7 +436,7 @@ fn test_cancel_stream_refunds_employer() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     let s = client.get_stream(&id);
     assert_eq!(s.status, StreamStatus::Cancelled);
@@ -465,7 +465,7 @@ fn test_cancel_stream_enriched_event() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Find the "cancelled" event in the emitted events list
     // SDK v28: use events().len() to verify at least one event, then check stream state
@@ -578,7 +578,7 @@ fn test_cannot_withdraw_from_cancelled_stream() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
@@ -615,7 +615,7 @@ fn test_withdraw_cancelled_still_panics() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     client.withdraw(&employee, &id);
 }
 
@@ -1006,7 +1006,7 @@ fn test_update_rate_cancelled_stream_rejected() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     client.update_rate(&employer, &id, &5);
 }
 
@@ -1618,7 +1618,7 @@ fn test_cancel_stream_event_contains_amounts() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Verify the cancelled event was emitted (at least one event exists)
     // and the stream state reflects the correct split (SDK v28: no .iter() on ContractEvents)
@@ -1649,7 +1649,7 @@ fn test_cancel_stream_paused_zero_claimable_full_refund_event() {
     client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &5_000, &10, &0, &None);
     client.pause_stream(&employer, &id);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Verify stream state (SDK v28: no .iter() on ContractEvents)
     let events = env.events().all();
@@ -1824,7 +1824,7 @@ fn test_withdraw_all_skips_cancelled_and_paused() {
     env.ledger().with_mut(|l| l.timestamp += 50);
 
     // Cancel stream 1, pause stream 2 — only stream 3 should be withdrawn
-    client.cancel_stream(&employer, &id1);
+    client.cancel_stream(&employer, &id1, &None);
     client.pause_stream(&employer, &id2);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
@@ -2185,7 +2185,7 @@ fn test_stream_status_cancelled() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     assert_eq!(client.stream_status(&id), StreamStatus::Cancelled);
 }
 
@@ -2530,7 +2530,7 @@ fn test_cancel_streams_batch_partial_failure_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
     // Cancel id2 individually first
-    client.cancel_stream(&employer, &id2);
+    client.cancel_stream(&employer, &id2, &None);
 
     // Now try batch cancel with id1 (active) and id2 (already cancelled)
     // → must panic because id2 is already ended
@@ -2982,7 +2982,7 @@ fn test_settle_stream_inactive_stream_panics() {
 
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     client.settle_stream(&id);
 }
 
@@ -3420,7 +3420,7 @@ fn test_set_low_balance_threshold_cancelled_stream_rejected() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
 
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     assert_eq!(client.get_stream(&id).status, StreamStatus::Cancelled);
 
     client.set_low_balance_threshold(&employer, &id, &500);
@@ -3631,7 +3631,7 @@ mod events {
         // deposit=10_000, rate=10/s; after 100s claimable=1_000, refund=9_000
         let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
         env.ledger().with_mut(|l| l.timestamp += 100);
-        client.cancel_stream(&employer, &id);
+        client.cancel_stream(&employer, &id, &None);
 
         let events = env.events().all();
         let cancelled = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
@@ -4261,7 +4261,7 @@ fn test_cancel_after_rate_update_pays_pending_accrual() {
 
     // 50 s at 20/s → new accrual = 1_000; total claimable = 1_000 + 1_000 = 2_000
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // The cancelled event's claimable_amount should include both portions
     let events = env.events().all();
@@ -4378,4 +4378,157 @@ fn test_withdraw_all_50_streams_within_budget() {
     // If CPU budget is exceeded the SDK panics, failing this test automatically
     let results = client.withdraw_all(&employee);
     assert_eq!(results.len(), STREAM_COUNT, "all 50 streams must be processed");
+}
+
+// ---------------------------------------------------------------------------
+// SC-44 – is_stream_expired convenience view (issue #242)
+// ---------------------------------------------------------------------------
+
+/// is_stream_expired returns false when stop_time is 0 (no hard stop).
+#[test]
+fn test_is_stream_expired_no_stop_time_returns_false() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &1, &0, &None);
+
+    // Advance far into the future — still no stop_time, should never expire.
+    env.ledger().with_mut(|l| l.timestamp += 1_000_000);
+    assert!(!client.is_stream_expired(&id));
+}
+
+/// is_stream_expired returns false before the grace period elapses.
+#[test]
+fn test_is_stream_expired_before_grace_period_returns_false() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop_time = now + 1_000;
+    let id = client.create_stream(
+        &employer, &employee, &token_id, &10_000, &1, &stop_time, &None,
+    );
+
+    // Advance to just after stop_time but before stop_time + GRACE_PERIOD (7 days).
+    env.ledger().with_mut(|l| l.timestamp = stop_time + 100);
+    assert!(!client.is_stream_expired(&id));
+}
+
+/// is_stream_expired returns true after grace period with no remaining claimable.
+#[test]
+fn test_is_stream_expired_clean_after_grace_period_returns_true() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop_time = now + 1_000;
+    // deposit exactly covers rate * duration so nothing is left after stop_time.
+    let id = client.create_stream(
+        &employer, &employee, &token_id, &1_000, &1, &stop_time, &None,
+    );
+
+    // Withdraw everything at stop_time.
+    env.ledger().with_mut(|l| l.timestamp = stop_time);
+    client.withdraw(&employee, &id);
+
+    // Advance past grace period (7 days = 604_800 s).
+    env.ledger().with_mut(|l| l.timestamp = stop_time + 604_801);
+    assert!(client.is_stream_expired(&id));
+}
+
+/// is_stream_expired returns false when claimable > 0 even after grace period.
+#[test]
+fn test_is_stream_expired_with_remaining_claimable_returns_false() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let now = env.ledger().timestamp();
+    let stop_time = now + 1_000;
+    // Large deposit — employee never withdraws, so claimable remains.
+    let id = client.create_stream(
+        &employer, &employee, &token_id, &100_000, &1, &stop_time, &None,
+    );
+
+    // Past grace period but employee has not withdrawn.
+    env.ledger().with_mut(|l| l.timestamp = stop_time + 604_801);
+    assert!(!client.is_stream_expired(&id));
+}
+
+// ---------------------------------------------------------------------------
+// SC-45 – cancel_reason on cancel_stream and event (issue #243)
+// ---------------------------------------------------------------------------
+
+/// cancel_stream with a reason records it in the event and succeeds.
+#[test]
+fn test_cancel_stream_with_reason_succeeds() {
+    use soroban_sdk::Symbol;
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let reason = Some(Symbol::new(&env, "budget_cut"));
+    client.cancel_stream(&employer, &id, &reason);
+
+    assert_eq!(client.get_stream(&id).status, crate::types::StreamStatus::Cancelled);
+}
+
+/// cancel_stream without a reason (None) is backwards compatible.
+#[test]
+fn test_cancel_stream_without_reason_backwards_compatible() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.cancel_stream(&employer, &id, &None);
+
+    assert_eq!(client.get_stream(&id).status, crate::types::StreamStatus::Cancelled);
+}
+
+/// Non-employer cannot cancel even with a reason supplied.
+#[test]
+#[should_panic(expected = "E018")]
+fn test_cancel_stream_with_reason_non_employer_rejected() {
+    use soroban_sdk::Symbol;
+
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    let reason = Some(Symbol::new(&env, "malicious"));
+    client.cancel_stream(&attacker, &id, &reason);
 }
