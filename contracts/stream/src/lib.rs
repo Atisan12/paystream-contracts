@@ -1162,7 +1162,8 @@ impl StreamContract {
         stream.locked = false;
         save_stream(&env, &stream);
         if amount > 0 {
-            events::withdrawn(&env, stream_id, &employee, amount);
+            let owner = receipt_owner(&env, &stream);
+            events::withdrawn(&env, stream_id, &owner, amount);
             let remaining = stream.deposit - stream.withdrawn;
             if stream.low_balance_threshold > 0 && remaining < stream.low_balance_threshold {
                 events::low_balance(
@@ -1433,6 +1434,7 @@ impl StreamContract {
             t.deposit,
             t.rate_per_second,
             t.stop_time,
+            None,
         )
     }
 

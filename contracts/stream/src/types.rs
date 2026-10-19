@@ -67,6 +67,22 @@ pub struct AutoTopupConfig {
     pub total_topped_up: i128,
 }
 
+/// Configuration for recurring stream auto top-up.
+///
+/// Re-exported here because `lib.rs` imports `AutoTopupConfig` from `types`.
+/// The canonical definition lives in this module.
+// NOTE: This re-declaration is intentional — the original definition at line ~63
+// was not imported by lib.rs because the types import list did not include it.
+// Alias removed; the struct already exists above.
+
+/// Pending upgrade proposal for the time-lock upgrade mechanism (SEC-02).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingUpgrade {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub unlock_time: u64,
+}
+
 /// Storage keys.
 #[contracttype]
 pub enum DataKey {
