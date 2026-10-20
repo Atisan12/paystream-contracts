@@ -172,3 +172,64 @@ Run `claimable` again — it restarts from near `0` and keeps growing.
 - Stream states and transitions: [Stream Status Lifecycle](api-reference.md#stream-status-lifecycle)
 - Error codes you may hit: [Error Codes](api-reference.md#error-codes)
 - JavaScript integration: [Client Guide](client-guide.md)
+
+## Estimating payroll costs
+
+Employers can model payroll costs before funding a stream using the off-chain
+calculator `scripts/project-stream.sh` (or its on-chain complement,
+`estimated_exhaustion_time`, view SC-40).
+
+Given a desired `rate_per_second` and `deposit`, the script reports:
+
+- **Time to exhaustion** — how long the deposit lasts at the given rate
+- **Monthly cost** — tokens consumed per 30-day month
+- **Recommended deposit for 6 months** — amount needed to run a stream half a year
+
+### Plain text output
+
+```bash
+./scripts/project-stream.sh 10000 10000000
+```
+
+Example output:
+
+```
+PayStream payroll projection
+============================
+Rate per second:    10000 tokens
+Deposit:            10000000 tokens
+Time to exhaustion: 1000 seconds (~0.01 days)
+Monthly cost:       25920000000 tokens/month
+Recommended deposit for 6 months: 155520000000 tokens
+```
+
+### JSON output
+
+```bash
+./scripts/project-stream.sh 10000 10000000 --json
+```
+
+Example output:
+
+```json
+{
+  "rate_per_second": 10000,
+  "deposit": 10000000,
+  "stop_time": 0,
+  "time_to_exhaustion_seconds": 1000,
+  "time_to_exhaustion_days": 0.01,
+  "monthly_cost": 25920000000,
+  "recommended_deposit_6_months": 155520000000
+}
+```
+
+An optional `stop_time` (hard end timestamp) may be passed as the third
+argument. The same calculation is available on-chain via
+`estimated_exhaustion_time(stream_id)`, which returns the estimated ledger
+timestamp at which a stream will be exhausted.
+
+Run via Makefile:
+
+```bash
+make project RATE=10000 DEPOSIT=10000000
+```

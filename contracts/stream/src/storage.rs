@@ -18,6 +18,10 @@ pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
 /// still have unclaimed tokens or that have not yet crossed stop_time + GRACE_PERIOD.
 pub const GRACE_PERIOD: u64 = 604_800; // 7 days
 
+/// Minimum waiting period (in seconds) after a stream reaches Cancelled or
+/// Exhausted before it may be archived. Default: 30 days = 2_592_000 s.
+pub const ARCHIVE_WAIT_PERIOD: u64 = 2_592_000;
+
 /// Persistent storage TTL thresholds (in ledgers).
 /// Stellar produces ~1 ledger/5 s → 1 year ≈ 6_307_200 ledgers.
 /// We keep stream data alive for at least 1 year and extend to 2 years on

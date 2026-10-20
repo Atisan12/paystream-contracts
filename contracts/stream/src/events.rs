@@ -42,6 +42,12 @@ pub fn stream_cancelled(env: &Env, id: u64, claimable_amount: i128, refund_amoun
     );
 }
 
+/// Emitted by `archive_stream` when a closed stream is moved to temporary storage.
+pub fn stream_archived(env: &Env, stream_id: u64) {
+    env.events()
+        .publish((symbol_short!("archived"), stream_id), ());
+}
+
 pub fn topped_up(env: &Env, id: u64, employer: &Address, amount: i128) {
     env.events()
         .publish((symbol_short!("v1"), symbol_short!("topup"), id), (employer.clone(), amount));
