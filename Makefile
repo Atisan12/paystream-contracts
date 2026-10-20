@@ -1,4 +1,9 @@
-.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks export-streams sync-labels
+
+# Configuration for the export-streams target — override on the command line:
+#   make export-streams CONTRACT_ID=C... EMPLOYER=G...
+CONTRACT_ID ?= $(STREAM_CONTRACT_ID)
+EMPLOYER ?= $(EMPLOYER_ADDRESS)
 
 build:
 	stellar contract build
@@ -40,6 +45,15 @@ deploy-local:
 
 deploy-testnet:
 	./scripts/deploy-testnet.sh
+
+# Export an employer's streams as CSV for payroll reconciliation.
+# Add JSON=1 to emit JSON instead of CSV, NETWORK=local to query another network.
+export-streams:
+	./scripts/export-streams.sh "$(CONTRACT_ID)" "$(EMPLOYER)" $(if $(NETWORK),--network $(NETWORK),) $(if $(JSON),--json,)
+
+# Apply .github/labels.yml to the repository (add --dry-run to preview).
+sync-labels:
+	./scripts/sync-labels.sh
 
 setup:
 	@echo "Setting up development environment..."
