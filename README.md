@@ -92,7 +92,9 @@ See the [glossary](docs/glossary.md) for terms and the [client guide](docs/clien
 │   ├── build.sh
 │   ├── deploy-local.sh
 │   ├── deploy-testnet.sh
-│   └── init-testnet.sh
+│   ├── export-streams.sh     # CSV/JSON export of an employer's streams
+│   ├── init-testnet.sh
+│   └── sync-labels.sh        # Apply .github/labels.yml to the repository
 ├── Cargo.toml
 ├── Makefile
 ├── CONTRIBUTING.md
@@ -219,6 +221,7 @@ Time is capped at `stop_time` if set. Paused time is excluded. See the [worked e
 - [API Reference](docs/api-reference.md)
 - [FAQ](docs/faq.md) — common integrator questions
 - [Operations Runbook](docs/operations-runbook.md) — admin procedures (nonce, pause, min deposit, admin transfer, upgrade)
+- [Migration Guide v0.1 → v0.2](docs/migration/v0.1-to-v0.2.md) — breaking changes, new error codes, and event schema changes
 
 ---
 
@@ -300,9 +303,11 @@ We welcome contributions from the community.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the full security policy and vulnerability reporting.
+See [SECURITY.md](SECURITY.md) for the full security policy, vulnerability reporting channels,
+and the responsible disclosure rewards programme.
 To rotate the admin keypair, follow the [key rotation runbook](docs/security/key-rotation.md).
-Report vulnerabilities to `security@paystream.example` — not via public issues.
+Report vulnerabilities through a [private GitHub security advisory](https://github.com/veracindarella/paystream-contracts/security/advisories/new)
+(or `security@paystream.example` — see [SEC-32 / #270](https://github.com/veracindarella/paystream-contracts/issues/270)) — not via public issues.
 
 ## License
 
