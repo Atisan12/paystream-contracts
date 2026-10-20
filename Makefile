@@ -4,6 +4,7 @@
 #   make export-streams CONTRACT_ID=C... EMPLOYER=G...
 CONTRACT_ID ?= $(STREAM_CONTRACT_ID)
 EMPLOYER ?= $(EMPLOYER_ADDRESS)
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks stream-status
 
 build:
 	stellar contract build
@@ -75,3 +76,11 @@ setup-hooks:
 	@echo "✓ Pre-commit hook installed successfully."
 	@echo "The hook will run 'cargo fmt --check' and 'cargo clippy' before each commit."
 	@echo "To skip the hook, use: git commit --no-verify"
+
+stream-status:
+	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(EMPLOYER)" ]; then \
+		echo "Usage: make stream-status CONTRACT_ID=<ID> EMPLOYER=<ADDRESS> [NETWORK=testnet]"; \
+		exit 1; \
+	fi
+	@./scripts/stream-status.sh "$(CONTRACT_ID)" "$(EMPLOYER)" "$(NETWORK)"
+

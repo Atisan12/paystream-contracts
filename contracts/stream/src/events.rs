@@ -42,6 +42,12 @@ pub fn stream_cancelled(env: &Env, id: u64, claimable_amount: i128, refund_amoun
     );
 }
 
+/// Emitted by `archive_stream` when a closed stream is moved to temporary storage.
+pub fn stream_archived(env: &Env, stream_id: u64) {
+    env.events()
+        .publish((symbol_short!("archived"), stream_id), ());
+}
+
 pub fn topped_up(env: &Env, id: u64, employer: &Address, amount: i128) {
     env.events()
         .publish((symbol_short!("v1"), symbol_short!("topup"), id), (employer.clone(), amount));
@@ -59,10 +65,39 @@ pub fn rate_updated(env: &Env, stream_id: u64, old_rate: i128, new_rate: i128) {
     );
 }
 
+/// Emitted when `update_stop_time` changes a stream's hard stop time.
+pub fn stop_time_updated(env: &Env, stream_id: u64, old_stop_time: u64, new_stop_time: u64) {
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("stop_upd"), stream_id),
+        (old_stop_time, new_stop_time),
+    );
+}
+
 /// Emitted by `expire_streams` when an eligible stream is transitioned to Exhausted.
 pub fn stream_expired(env: &Env, stream_id: u64) {
     env.events()
         .publish((symbol_short!("expired"), stream_id), ());
+}
+
+/// Emitted by `check_stream_expiry` when an Active stream's `stop_time` is
+/// approaching (within 24 hours / 86400 seconds). No state is changed.
+pub fn stream_near_expiry(env: &Env, stream_id: u64, seconds_remaining: i128) {
+    env.events()
+        .publish(
+            (symbol_short!("v1"), symbol_short!("near_exp")),
+            (stream_id, seconds_remaining),
+        );
+}
+
+/// Emitted by `check_stream_expiry` when an Active stream has passed its
+/// `stop_time` and remains unresolved (not yet settled or cancelled). No
+/// state is changed.
+pub fn stream_expired_unresolved(env: &Env, stream_id: u64, stop_time: u64) {
+    env.events()
+        .publish(
+            (symbol_short!("v1"), symbol_short!("exp_unres")),
+            (stream_id, stop_time),
+        );
 }
 
 pub fn upgrade_proposed(env: &Env, wasm_hash: &soroban_sdk::BytesN<32>, unlock_time: u64) {
@@ -117,3 +152,35 @@ pub fn threshold_updated(env: &Env, stream_id: u64, old_threshold: i128, new_thr
     );
 }
 
+/// Emitted by `check_low_balance` when the remaining deposit is below the threshold.
+/// On-demand alert mechanism for keeper bots.
+pub fn low_balance_check(env: &Env, id: u64, employer: &Address, remaining: i128, threshold: i128) {
+    env.events().publish(
+        (symbol_short!("low_bal"), id),
+        (employer.clone(), remaining, threshold),
+    );
+}
+
+/// Emitted by `create_split_stream` when creating a multi-beneficiary stream (PROD-22).
+pub fn split_stream_created(env: &Env, id: u64, employer: &Address, rate: i128) {
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("split"), id),
+        (employer.clone(), rate),
+    );
+}
+
+/// Emitted by `emit_platform_stats` to provide periodic analytics checkpoints (PROD-23).
+/// Enables efficient indexing of aggregated metrics without full ledger scans.
+pub fn platform_stats(
+    env: &Env,
+    timestamp: u64,
+    total_streams: u64,
+    total_deposit_locked: i128,
+    total_withdrawn: i128,
+    active_streams: u64,
+) {
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("p_stats")),
+        (timestamp, total_streams, total_deposit_locked, total_withdrawn, active_streams),
+    );
+}

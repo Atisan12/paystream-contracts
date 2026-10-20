@@ -17,6 +17,7 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 - [Commit Conventions](#commit-conventions)
 - [Bounty Program & Finding Issues](#bounty-program--finding-issues)
   - [Finding your first issue](#finding-your-first-issue)
+- [Claiming a Bounty](#claiming-a-bounty)
 - [Questions & Discussions](#questions--discussions)
 - [Pull Request Process](#pull-request-process)
 - [Changelog](#changelog)
@@ -271,7 +272,9 @@ When adding a new error, assign the next available code, add the constant to `ty
 
 ### Documentation
 
-- Public functions must have a doc comment (`///`) explaining parameters, return value, and any panic conditions
+- Every public Rust item must have a doc comment (`///`): modules, types, enum variants, fields, constants, and functions.
+- Public functions must document their parameters, return values, and panic/error conditions. Keep API docs in `docs/api-reference.md` in sync with contract entry points.
+- The stream contract enforces this standard with `#![deny(missing_docs)]`; CI runs a rustdoc check and fails when public items lack documentation.
 - Non-obvious logic must have inline comments — especially around reentrancy, overflow handling, and status transitions
 
 ---
@@ -339,9 +342,44 @@ Looking for tasks to contribute to?
 
 ---
 
+## Claiming a Bounty
+
+PayStream bounties are paid out only after a PR is merged into `main`. Follow these steps to claim a bounty:
+
+### Step 1: Comment on the issue
+Leave a comment on the issue saying you plan to work on it. This signals intent and prevents duplicated effort. See [docs/bounties.md](docs/bounties.md) for the active bounty table and open tasks.
+
+### Step 2: Get assignment confirmation
+Wait for a maintainer to confirm your assignment on the issue. Work on one active issue at a time. If someone else has already been assigned, pick a different issue.
+
+### Step 3: Implement
+Create a feature branch from `main` and implement the change following the [Coding Standards](#coding-standards). Add unit tests for any new contract function and update affected documentation.
+
+### Step 4: Open a PR referencing the issue
+Open a pull request against `veracindarella/paystream-contracts:main`. Reference the issue in the PR description using `Closes #<number>`. Keep the PR focused on a single concern.
+
+### Step 5: Wait for merge
+Address review feedback promptly. Once the PR is approved and merged, the bounty acceptance criteria are fulfilled.
+
+### FAQ
+
+**What if someone else starts the same issue?**
+Only one contributor is assigned per issue. Comment first and wait for assignment confirmation before writing code. If another contributor is already assigned, their work takes precedence — choose a different issue to avoid duplicate effort.
+
+**What counts as completion?**
+A bounty is complete when the PR is merged into `main` and all acceptance criteria are met: tests pass, lint and formatting are clean, and documentation (including `docs/bounties.md`) reflects the change. Simply opening a PR is not enough — the merge is the trigger for fulfillment.
+
+For bounty categories, effort tiers, and the full bounty table, see [docs/bounties.md](docs/bounties.md).
+
+---
+
 ## Questions & Discussions
 
-- **Questions, ideas, and show-and-tell** → [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions) (categories: Q&A, Ideas, Show and Tell, Announcements). Start with the pinned "Welcome & FAQ" thread.
+- **Q&A** → [GitHub Discussions: Q&A](https://github.com/veracindarella/paystream-contracts/discussions/categories/q-a) — integrator questions and troubleshooting
+- **Ideas** → [GitHub Discussions: Ideas](https://github.com/veracindarella/paystream-contracts/discussions/categories/ideas) — feature ideas and product suggestions
+- **Integrations** → [GitHub Discussions: Integrations](https://github.com/veracindarella/paystream-contracts/discussions/categories/integrations) — third-party integrations and client libraries
+- **Show and Tell** → [GitHub Discussions: Show and Tell](https://github.com/veracindarella/paystream-contracts/discussions/categories/show-and-tell) — share what you've built with PayStream
+- **Announcements** → [GitHub Discussions: Announcements](https://github.com/veracindarella/paystream-contracts/discussions/categories/announcements) — releases and project updates (read-only for members)
 - **Bugs and concrete feature requests** → [GitHub Issues](https://github.com/veracindarella/paystream-contracts/issues).
 - **Security vulnerabilities** → follow [SECURITY.md](SECURITY.md); never open a public issue.
 
@@ -494,6 +532,16 @@ make coverage      # print a per-file coverage summary
 
 Target baseline: **>90% line coverage** for `contracts/stream` and `contracts/token`. New code should not lower coverage.
 
+#### Codecov patch coverage gate (enforced in CI)
+
+A `codecov.yml` file at the repository root configures a **minimum 80% patch coverage** requirement. This means:
+
+- Every PR must have at least 80% of its **new and changed lines** covered by tests.
+- Codecov will post a status check on each PR. CI fails if the patch coverage falls below 80%.
+- The project-level coverage target is tracked for visibility but is **not** a hard gate (to avoid penalising PRs that touch legacy uncovered code).
+
+If your PR intentionally adds code that cannot be unit-tested (e.g., event-emission helpers, dead-code stubs, or wasm-only paths), document the gap in the PR description so reviewers can verify the `codecov.yml` ignore list or approve the exception.
+
 ### Mutation testing
 
 [`cargo-mutants`](https://mutants.rs) checks that tests actually assert on behaviour, not just execute code.
@@ -508,6 +556,24 @@ Each surviving mutant must either be killed by a new test or documented as accep
 ### Snapshot files
 
 Test snapshots in `test_snapshots/` are generated automatically by the SDK. Commit them alongside the test that produces them. If a snapshot changes unexpectedly, investigate before updating it — an unexpected snapshot diff often indicates a behaviour regression.
+
+#### Updating event snapshots
+
+Event payload snapshots live in `contracts/stream/test_snapshots/events/` and are generated by the tests in `mod events` inside `test.rs`. They capture the exact topic and data layout of every event emitted by the contract.
+
+To regenerate all event snapshots after an intentional schema change:
+
+```bash
+SOROBAN_TEST_SNAPSHOTS=update cargo test --package paystream-stream events::
+```
+
+To regenerate a single snapshot (e.g. after changing `stream_created`):
+
+```bash
+SOROBAN_TEST_SNAPSHOTS=update cargo test --package paystream-stream events::test_event_stream_created
+```
+
+Always review the diff of regenerated snapshot files before committing. A snapshot change means the on-chain event schema changed — indexers and off-chain consumers must be updated in the same PR.
 
 ---
 
