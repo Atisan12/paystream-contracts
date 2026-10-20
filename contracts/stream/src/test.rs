@@ -4445,3 +4445,157 @@ fn test_withdraw_all_50_streams_within_budget() {
     let results = client.withdraw_all(&employee);
     assert_eq!(results.len(), STREAM_COUNT, "all 50 streams must be processed");
 }
+
+// ---------------------------------------------------------------------------
+// PROD-19 – transfer_stream: reassign stream ownership to a new employer
+// ---------------------------------------------------------------------------
+
+/// Happy path: employer transfers an Active stream to a new employer.
+/// The stream's terms are unchanged; the employer field and indexes are updated.
+#[test]
+fn test_transfer_stream_happy_path() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    assert!(client.streams_by_employer(&employer).contains(id));
+    assert!(!client.streams_by_employer(&new_employer).contains(id));
+
+    client.transfer_stream(&employer, &id, &new_employer);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.employer, new_employer);
+    assert_eq!(s.employee, employee);
+    assert_eq!(s.deposit, 10_000);
+    assert_eq!(s.rate_per_second, 10);
+    assert_eq!(s.status, StreamStatus::Active);
+
+    // Index updated: id removed from old employer, added to new employer.
+    assert!(!client.streams_by_employer(&employer).contains(id));
+    assert!(client.streams_by_employer(&new_employer).contains(id));
+}
+
+/// Transfer works on a Paused stream.
+#[test]
+fn test_transfer_stream_paused_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+    client.pause_stream(&employer, &id);
+
+    client.transfer_stream(&employer, &id, &new_employer);
+
+    let s = client.get_stream(&id);
+    assert_eq!(s.employer, new_employer);
+    assert_eq!(s.status, StreamStatus::Paused);
+}
+
+/// Wrong caller (not the employer) must be rejected with ERR_NOT_EMPLOYER.
+#[test]
+#[should_panic(expected = "E018")]
+fn test_transfer_stream_wrong_caller_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.transfer_stream(&attacker, &id, &new_employer);
+}
+
+/// Transfer of a Cancelled stream must be rejected with ERR_STREAM_ALREADY_ENDED.
+#[test]
+#[should_panic(expected = "E020")]
+fn test_transfer_stream_cancelled_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+    client.cancel_stream(&employer, &id);
+
+    client.transfer_stream(&employer, &id, &new_employer);
+}
+
+/// Transfer of an Exhausted stream must be rejected with ERR_STREAM_ALREADY_ENDED.
+#[test]
+#[should_panic(expected = "E020")]
+fn test_transfer_stream_exhausted_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    client.set_min_deposit(&admin, &0, &100);
+    let id = client.create_stream(&employer, &employee, &token_id, &500, &10, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.withdraw(&employee, &id); // exhausts the stream
+
+    client.transfer_stream(&employer, &id, &new_employer);
+}
+
+/// new_employer must not equal the stream's employee (E028).
+#[test]
+#[should_panic(expected = "E028")]
+fn test_transfer_stream_new_employer_is_employee_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.transfer_stream(&employer, &id, &employee);
+}
+
+/// After transfer, the new employer can pause/resume/cancel the stream.
+#[test]
+fn test_transfer_stream_new_employer_can_manage() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let new_employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.transfer_stream(&employer, &id, &new_employer);
+
+    client.pause_stream(&new_employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
+
+    client.resume_stream(&new_employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Active);
+
+    client.cancel_stream(&new_employer, &id);
+    assert_eq!(client.get_stream(&id).status, StreamStatus::Cancelled);
+}
