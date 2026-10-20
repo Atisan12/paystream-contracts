@@ -1,4 +1,5 @@
 .PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks create-stream
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks stream-status
 
 build:
 	stellar contract build
@@ -64,3 +65,10 @@ setup-hooks:
 
 create-stream:
 	./scripts/create-stream-wizard.sh
+stream-status:
+	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(EMPLOYER)" ]; then \
+		echo "Usage: make stream-status CONTRACT_ID=<ID> EMPLOYER=<ADDRESS> [NETWORK=testnet]"; \
+		exit 1; \
+	fi
+	@./scripts/stream-status.sh "$(CONTRACT_ID)" "$(EMPLOYER)" "$(NETWORK)"
+
