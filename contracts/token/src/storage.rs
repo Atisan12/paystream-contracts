@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::types::TokenDataKey;
-use soroban_sdk::{Address, Env};
+use crate::types::{TokenDataKey, TokenMetadata};
+use soroban_sdk::{Address, Env, String};
+
+/// Defaults returned by `decimals` / `name` / `symbol` until the admin calls
+/// `set_metadata`. 7 decimals matches Stellar classic assets and the SAC.
+pub const DEFAULT_DECIMALS: u32 = 7;
+pub const DEFAULT_NAME: &str = "PayStream Token";
+pub const DEFAULT_SYMBOL: &str = "PST";
 
 pub fn balance_of(env: &Env, owner: &Address) -> i128 {
     env.storage()
@@ -17,6 +23,7 @@ pub fn set_balance(env: &Env, owner: &Address, amount: i128) {
 }
 
 /// Returns `(amount, expiration_ledger)`; `(0, 0)` if no allowance is stored.
+/// The amount is returned even if expired; callers decide how to treat expiry.
 pub fn allowance(env: &Env, owner: &Address, spender: &Address) -> (i128, u32) {
     env.storage()
         .temporary()
@@ -31,10 +38,36 @@ pub fn set_allowance(
     amount: i128,
     expiration_ledger: u32,
 ) {
-    env.storage().temporary().set(
-        &TokenDataKey::Allowance(owner.clone(), spender.clone()),
-        &(amount, expiration_ledger),
-    );
+    let key = TokenDataKey::Allowance(owner.clone(), spender.clone());
+    env.storage()
+        .temporary()
+        .set(&key, &(amount, expiration_ledger));
+    // SEP-41: keep the allowance entry alive until its expiration ledger.
+    if amount > 0 {
+        let live_for = expiration_ledger.saturating_sub(env.ledger().sequence());
+        if live_for > 0 {
+            env.storage().temporary().extend_ttl(&key, live_for, live_for);
+        }
+    }
+}
+
+pub fn metadata(env: &Env) -> TokenMetadata {
+    env.storage()
+        .instance()
+        .get(&TokenDataKey::Metadata)
+        .unwrap_or_else(|| TokenMetadata {
+            decimal: DEFAULT_DECIMALS,
+            name: String::from_str(env, DEFAULT_NAME),
+            symbol: String::from_str(env, DEFAULT_SYMBOL),
+        })
+}
+
+pub fn has_metadata(env: &Env) -> bool {
+    env.storage().instance().has(&TokenDataKey::Metadata)
+}
+
+pub fn set_metadata(env: &Env, metadata: &TokenMetadata) {
+    env.storage().instance().set(&TokenDataKey::Metadata, metadata);
 }
 
 pub fn total_supply(env: &Env) -> i128 {

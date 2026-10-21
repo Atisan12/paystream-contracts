@@ -2,6 +2,7 @@
 
 #![no_std]
 
+mod events;
 mod storage;
 mod types;
 
@@ -10,10 +11,11 @@ mod test;
 
 use crate::storage::{
     admin_nonce, allowance, balance_of, clear_pending_admin, consume_admin_nonce, get_admin,
-    get_pending_admin, has_admin, set_admin, set_allowance, set_balance, set_pending_admin,
-    set_total_supply, total_supply,
+    get_pending_admin, has_admin, has_metadata, metadata, set_admin, set_allowance, set_balance,
+    set_metadata, set_pending_admin, set_total_supply, total_supply,
 };
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env};
+pub use crate::types::{TokenMetadata, TransferMuxedData};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, MuxedAddress, String};
 
 /// T001: token arithmetic overflow.
 const ERR_OVERFLOW: &str = "T001: token arithmetic overflow";
@@ -62,26 +64,31 @@ impl TokenContract {
         balance_of(&env, &owner)
     }
 
-    /// Transfer `amount` tokens from `from` to `to`.
+    /// Transfer `amount` tokens from `from` to `to` (SEP-41).
+    ///
+    /// `to` is a `MuxedAddress` as required by the current SEP-41 revision
+    /// (CAP-67); a plain `Address` is accepted unchanged by callers. Balances
+    /// are keyed by the underlying address; the muxed id only appears in the
+    /// `transfer` event.
     ///
     /// # Parameters
     /// - `from` — sender (requires auth)
-    /// - `to` — recipient
+    /// - `to` — recipient, optionally muxed
     /// - `amount` — number of tokens to transfer (must be > 0)
+    ///
+    /// # Events
+    /// `["transfer", from, to]` with data `amount`, or
+    /// `{amount, to_muxed_id}` when `to` is muxed.
     ///
     /// # Errors
     /// - Panics if `amount` ≤ 0
     /// - Panics if `from` has insufficient balance
-    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+    pub fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128) {
         from.require_auth();
         assert!(amount > 0, "amount must be positive");
-        let from_bal = balance_of(&env, &from);
-        assert!(from_bal >= amount, "insufficient balance");
-        set_balance(&env, &from, from_bal - amount);
-        let to_bal = balance_of(&env, &to)
-            .checked_add(amount)
-            .expect(ERR_OVERFLOW);
-        set_balance(&env, &to, to_bal);
+        let to_addr = to.address();
+        move_balance(&env, &from, &to_addr, amount);
+        events::transfer(&env, &from, &to_addr, to.id(), amount);
     }
 
     /// Approve `spender` to transfer up to `amount` tokens on behalf of `owner`.
@@ -104,19 +111,64 @@ impl TokenContract {
         expiration_ledger: u32,
     ) {
         owner.require_auth();
+        assert!(amount >= 0, "amount must not be negative");
         assert!(
             amount == 0 || expiration_ledger >= env.ledger().sequence(),
             "expiration_ledger is in the past"
         );
         set_allowance(&env, &owner, &spender, amount, expiration_ledger);
+        events::approve(&env, &owner, &spender, amount, expiration_ledger);
     }
 
-    /// Return the allowance granted by `owner` to `spender`.
+    /// Return the allowance granted by `owner` to `spender` (SEP-41).
     ///
     /// # Returns
-    /// `(amount, expiration_ledger)`; `(0, 0)` if no allowance exists.
-    pub fn allowance(env: Env, owner: Address, spender: Address) -> (i128, u32) {
+    /// The remaining allowance; 0 if none exists or it has expired.
+    pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
+        let (amount, expiration_ledger) = allowance(&env, &owner, &spender);
+        if env.ledger().sequence() > expiration_ledger {
+            0
+        } else {
+            amount
+        }
+    }
+
+    /// Return `(amount, expiration_ledger)` for an allowance, including expired
+    /// ones. Not part of SEP-41; useful for wallets showing when an approval
+    /// lapses. `(0, 0)` if no allowance exists.
+    pub fn allowance_with_expiration(env: Env, owner: Address, spender: Address) -> (i128, u32) {
         allowance(&env, &owner, &spender)
+    }
+
+    /// Number of decimals used to display amounts (SEP-41).
+    pub fn decimals(env: Env) -> u32 {
+        metadata(&env).decimal
+    }
+
+    /// Human-readable token name (SEP-41).
+    pub fn name(env: Env) -> String {
+        metadata(&env).name
+    }
+
+    /// Ticker symbol (SEP-41).
+    pub fn symbol(env: Env) -> String {
+        metadata(&env).symbol
+    }
+
+    /// Set token metadata once (admin only).
+    ///
+    /// Until called, `decimals` / `name` / `symbol` return the defaults (7,
+    /// "PayStream Token", "PST"). Metadata is write-once so wallets and
+    /// indexers can cache it.
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match the stored admin
+    /// - Panics if metadata has already been set
+    pub fn set_metadata(env: Env, admin: Address, decimal: u32, name: String, symbol: String) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        assert!(!has_metadata(&env), "metadata already set");
+        set_metadata(&env, &TokenMetadata { decimal, name, symbol });
     }
 
     /// Transfer `amount` tokens from `from` to `to` using `spender`'s allowance.
@@ -133,20 +185,19 @@ impl TokenContract {
     /// - Panics if `from` has insufficient balance
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
+        // Without this a negative amount passed every check below and moved
+        // tokens *to* `from` while raising the allowance.
+        assert!(amount > 0, "amount must be positive");
         let (allowed, expiration_ledger) = allowance(&env, &from, &spender);
         assert!(
             env.ledger().sequence() <= expiration_ledger,
             "allowance expired"
         );
         assert!(allowed >= amount, "allowance exceeded");
-        let from_bal = balance_of(&env, &from);
-        assert!(from_bal >= amount, "insufficient balance");
+        assert!(balance_of(&env, &from) >= amount, "insufficient balance");
         set_allowance(&env, &from, &spender, allowed - amount, expiration_ledger);
-        set_balance(&env, &from, from_bal - amount);
-        let to_bal = balance_of(&env, &to)
-            .checked_add(amount)
-            .expect(ERR_OVERFLOW);
-        set_balance(&env, &to, to_bal);
+        move_balance(&env, &from, &to, amount);
+        events::transfer(&env, &from, &to, None, amount);
     }
 
     /// Mint `amount` new tokens to `to`, increasing total supply.
@@ -175,6 +226,7 @@ impl TokenContract {
             .expect(ERR_OVERFLOW);
         set_balance(&env, &to, to_bal);
         set_total_supply(&env, new_supply);
+        events::mint(&env, &to, amount);
     }
 
     /// Return the current admin nonce expected by [`mint`].
@@ -253,6 +305,7 @@ impl TokenContract {
         assert!(bal >= amount, "insufficient balance");
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
+        events::burn(&env, &from, amount);
     }
 
     /// Burn `amount` tokens from `from` using `spender`'s allowance.
@@ -283,5 +336,16 @@ impl TokenContract {
         set_allowance(&env, &from, &spender, allowed - amount, expiration_ledger);
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
+        events::burn(&env, &from, amount);
     }
+}
+
+/// Debit `from` and credit `to`, checking balance and overflow. A transfer to
+/// self leaves the balance unchanged.
+fn move_balance(env: &Env, from: &Address, to: &Address, amount: i128) {
+    let from_bal = balance_of(env, from);
+    assert!(from_bal >= amount, "insufficient balance");
+    set_balance(env, from, from_bal - amount);
+    let to_bal = balance_of(env, to).checked_add(amount).expect(ERR_OVERFLOW);
+    set_balance(env, to, to_bal);
 }

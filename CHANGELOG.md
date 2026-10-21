@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- PROD-17 (#306): cliff vesting — `cliff_time: Option<u64>` on `create_stream` and `StreamParams`, `get_cliff_time`, `cliff_reached` event, E035 `ERR_CLIFF_AFTER_STOP`. **Breaking:** `create_stream` takes an extra trailing argument and `StreamParams` gains a field (saved templates from earlier builds no longer decode).
+- PROD-20 (#309): `delete_template` and `get_template`; templates carry `cliff_time`.
+- TOK-20 (#305): SEP-41 compliance — `decimals` / `name` / `symbol` with write-once `set_metadata`, `transfer` / `approve` / `burn` / `mint` events, `transfer` accepts a `MuxedAddress`. **Breaking:** `allowance` returns `i128` (0 when expired); the old tuple is `allowance_with_expiration`. See `docs/sep41-compliance.md`.
+- TOK-19 (#304): token proptest fuzz targets (`contracts/token/fuzz`) and a CI job.
+
+### Fixed
+
+- Token `transfer_from` accepted negative amounts (moving tokens to `from` and raising the allowance); `approve` accepted negative amounts.
+- Stream `update_rate` double-counted previously banked `pending_accrual` on every rate change.
+- Stream contract did not compile on `main` (definitions dropped by merges restored from the commits that introduced them; soroban-sdk 28 test API updates).
+
+### Added (earlier)
+
 - Canonical read-only stream index entrypoints `stream_ids_by_employer` and `stream_ids_by_employee`; the former `streams_by_*` entrypoints remain as deprecated aliases.
 - SC-06: `stream_status(stream_id) -> StreamStatus` — lightweight view that returns only
   the stream status without loading the full `Stream` struct into the caller's response.
