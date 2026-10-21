@@ -10,4 +10,5 @@ pub enum TokenDataKey {
     Admin,
     PendingAdmin,
     AdminNonce,
+    Paused,
 }

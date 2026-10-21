@@ -10,13 +10,34 @@ mod test;
 
 use crate::storage::{
     admin_nonce, allowance, balance_of, clear_pending_admin, consume_admin_nonce, get_admin,
-    get_pending_admin, has_admin, set_admin, set_allowance, set_balance, set_pending_admin,
-    set_total_supply, total_supply,
+    get_pending_admin, has_admin, is_paused, set_admin, set_allowance, set_balance,
+    set_paused, set_pending_admin, set_total_supply, total_supply,
 };
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, Vec};
 
 /// T001: token arithmetic overflow.
 const ERR_OVERFLOW: &str = "T001: token arithmetic overflow";
+/// T002: token transfers are paused.
+const ERR_PAUSED: &str = "T002: token is paused";
+/// T003: mint batch exceeds the maximum recipient count.
+const ERR_BATCH_TOO_LARGE: &str = "T003: batch too large";
+
+/// Maximum number of recipients accepted by [`TokenContract::mint_to_batch`].
+pub const MAX_MINT_BATCH: u32 = 50;
+
+fn assert_not_paused(env: &Env) {
+    assert!(!is_paused(env), "{}", ERR_PAUSED);
+}
+
+fn emit_mint(env: &Env, admin: &Address, to: &Address, amount: i128) {
+    env.events()
+        .publish((symbol_short!("mint"), admin.clone(), to.clone()), amount);
+}
+
+fn emit_burn(env: &Env, from: &Address, amount: i128) {
+    env.events()
+        .publish((symbol_short!("burn"), from.clone()), amount);
+}
 
 #[contract]
 pub struct TokenContract;
@@ -74,6 +95,7 @@ impl TokenContract {
     /// - Panics if `from` has insufficient balance
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
+        assert_not_paused(&env);
         assert!(amount > 0, "amount must be positive");
         let from_bal = balance_of(&env, &from);
         assert!(from_bal >= amount, "insufficient balance");
@@ -133,6 +155,7 @@ impl TokenContract {
     /// - Panics if `from` has insufficient balance
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
+        assert_not_paused(&env);
         let (allowed, expiration_ledger) = allowance(&env, &from, &spender);
         assert!(
             env.ledger().sequence() <= expiration_ledger,
@@ -175,11 +198,93 @@ impl TokenContract {
             .expect(ERR_OVERFLOW);
         set_balance(&env, &to, to_bal);
         set_total_supply(&env, new_supply);
+        emit_mint(&env, &admin, &to, amount);
     }
 
-    /// Return the current admin nonce expected by [`mint`].
+    /// Mint tokens to up to [`MAX_MINT_BATCH`] recipients in one call (TOK-14).
+    ///
+    /// A single admin nonce is consumed for the whole batch. The batch is
+    /// all-or-nothing: if any entry is invalid or would overflow a balance or
+    /// the total supply, the whole call reverts.
+    ///
+    /// # Parameters
+    /// - `admin` — must match the stored admin (requires auth)
+    /// - `nonce` — current admin nonce; consumed once for the batch
+    /// - `recipients` — `(recipient, amount)` pairs; each amount must be > 0
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `nonce` does not match the stored admin nonce
+    /// - T003 if `recipients` has more than [`MAX_MINT_BATCH`] entries
+    /// - Panics if any amount ≤ 0
+    /// - T001 if any balance or the total supply would overflow
+    pub fn mint_to_batch(env: Env, admin: Address, nonce: u64, recipients: Vec<(Address, i128)>) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        assert!(recipients.len() <= MAX_MINT_BATCH, "{}", ERR_BATCH_TOO_LARGE);
+        consume_admin_nonce(&env, nonce);
+        let mut supply = total_supply(&env);
+        for (to, amount) in recipients.iter() {
+            assert!(amount > 0, "amount must be positive");
+            supply = supply.checked_add(amount).expect(ERR_OVERFLOW);
+            let to_bal = balance_of(&env, &to)
+                .checked_add(amount)
+                .expect(ERR_OVERFLOW);
+            set_balance(&env, &to, to_bal);
+            emit_mint(&env, &admin, &to, amount);
+        }
+        set_total_supply(&env, supply);
+    }
+
+    /// Return the current admin nonce expected by admin-gated functions.
     pub fn admin_nonce(env: Env) -> u64 {
         admin_nonce(&env)
+    }
+
+    /// Alias of [`admin_nonce`] (TOK-12).
+    pub fn get_admin_nonce(env: Env) -> u64 {
+        admin_nonce(&env)
+    }
+
+    /// Admin pauses all token transfers and burns (TOK-13).
+    ///
+    /// # Parameters
+    /// - `admin` — must match the stored admin (requires auth)
+    /// - `nonce` — current admin nonce (replay protection)
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `nonce` does not match the stored admin nonce
+    pub fn pause_token(env: Env, admin: Address, nonce: u64) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        consume_admin_nonce(&env, nonce);
+        set_paused(&env, true);
+        env.events()
+            .publish((Symbol::new(&env, "token_paused"),), true);
+    }
+
+    /// Admin resumes token transfers and burns (TOK-13).
+    ///
+    /// # Parameters
+    /// - `admin` — must match the stored admin (requires auth)
+    /// - `nonce` — current admin nonce (replay protection)
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `nonce` does not match the stored admin nonce
+    pub fn unpause_token(env: Env, admin: Address, nonce: u64) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        consume_admin_nonce(&env, nonce);
+        set_paused(&env, false);
+        env.events()
+            .publish((Symbol::new(&env, "token_paused"),), false);
+    }
+
+    /// Return whether token transfers and burns are currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        is_paused(&env)
     }
 
     /// Admin upgrades the token contract WASM in-place (TOK-10).
@@ -213,11 +318,14 @@ impl TokenContract {
     ///
     /// # Parameters
     /// - `new_admin` — address being nominated as the next admin
+    /// - `nonce` — current admin nonce (replay protection)
     ///
     /// # Errors
     /// - Panics if the current admin auth fails
-    pub fn propose_admin(env: Env, new_admin: Address) {
+    /// - Panics if `nonce` does not match the stored admin nonce
+    pub fn propose_admin(env: Env, new_admin: Address, nonce: u64) {
         get_admin(&env).require_auth();
+        consume_admin_nonce(&env, nonce);
         set_pending_admin(&env, &new_admin);
     }
 
@@ -248,11 +356,13 @@ impl TokenContract {
     /// - Panics if `from` has insufficient balance
     pub fn burn(env: Env, from: Address, amount: i128) {
         from.require_auth();
+        assert_not_paused(&env);
         assert!(amount > 0, "amount must be positive");
         let bal = balance_of(&env, &from);
         assert!(bal >= amount, "insufficient balance");
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
+        emit_burn(&env, &from, amount);
     }
 
     /// Burn `amount` tokens from `from` using `spender`'s allowance.
@@ -271,6 +381,7 @@ impl TokenContract {
     /// - Panics if `from` has insufficient balance
     pub fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
         spender.require_auth();
+        assert_not_paused(&env);
         assert!(amount > 0, "amount must be positive");
         let (allowed, expiration_ledger) = allowance(&env, &from, &spender);
         assert!(
@@ -283,5 +394,6 @@ impl TokenContract {
         set_allowance(&env, &from, &spender, allowed - amount, expiration_ledger);
         set_balance(&env, &from, bal - amount);
         set_total_supply(&env, total_supply(&env) - amount);
+        emit_burn(&env, &from, amount);
     }
 }
