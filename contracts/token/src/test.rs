@@ -2,8 +2,9 @@
 
 #![cfg(test)]
 
-use crate::{TokenContract, TokenContractClient};
-use soroban_sdk::testutils::{Address as _, Ledger};
+use crate::types::TokenDataKey;
+use crate::{TokenContract, TokenContractClient, TOKEN_CONTRACT_VERSION, TTL_EXTEND_TO};
+use soroban_sdk::testutils::{storage::Persistent as _, Address as _, Ledger};
 use soroban_sdk::{Address, Env};
 
 fn setup() -> (Env, TokenContractClient<'static>) {
@@ -179,11 +180,11 @@ fn test_allowance_not_expired_works() {
     client.initialize(&admin, &1_000);
     let exp = env.ledger().sequence() + 5;
     client.approve(&admin, &spender, &300, &exp);
-    assert_eq!(client.allowance(&admin, &spender), (300, exp));
+    assert_eq!(client.allowance(&admin, &spender), 300);
     env.ledger().with_mut(|l| l.sequence_number = exp);
     client.transfer_from(&spender, &admin, &to, &100);
     assert_eq!(client.balance(&to), 100);
-    assert_eq!(client.allowance(&admin, &spender), (200, exp));
+    assert_eq!(client.allowance(&admin, &spender), 200);
 }
 
 #[test]
@@ -217,6 +218,10 @@ fn test_burn_from_expired_allowance_rejected() {
 // TOK-10 – upgrade mechanism
 // ---------------------------------------------------------------------------
 
+fn zero_hash(env: &Env) -> soroban_sdk::BytesN<32> {
+    soroban_sdk::BytesN::from_array(env, &[0u8; 32])
+}
+
 #[test]
 #[should_panic]
 fn test_upgrade_non_admin_rejected() {
@@ -228,7 +233,16 @@ fn test_upgrade_non_admin_rejected() {
     client.initialize(&admin, &1_000);
     // Drop mocked auths: upgrade must require the stored admin's signature.
     env.set_auths(&[]);
-    client.upgrade(&soroban_sdk::BytesN::from_array(&env, &[0u8; 32]), &0);
+    client.upgrade(&admin, &0, &zero_hash(&env));
+}
+
+#[test]
+#[should_panic(expected = "not admin")]
+fn test_upgrade_wrong_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.upgrade(&Address::generate(&env), &0, &zero_hash(&env));
 }
 
 #[test]
@@ -237,7 +251,68 @@ fn test_upgrade_wrong_nonce_rejected() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin, &1_000);
-    client.upgrade(&soroban_sdk::BytesN::from_array(&env, &[0u8; 32]), &5);
+    client.upgrade(&admin, &5, &zero_hash(&env));
+}
+
+#[test]
+fn test_upgrade_schedules_with_24h_timelock() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    client.upgrade(&admin, &0, &zero_hash(&env));
+    let pending = client.pending_upgrade().unwrap();
+    assert_eq!(pending.wasm_hash, zero_hash(&env));
+    assert_eq!(pending.unlock_time, 1_000 + 86_400);
+}
+
+#[test]
+#[should_panic(expected = "T004: upgrade timelock active")]
+fn test_execute_upgrade_before_timelock_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.upgrade(&admin, &0, &zero_hash(&env));
+    env.ledger().with_mut(|l| l.timestamp = 86_399);
+    client.execute_upgrade(&admin, &1);
+}
+
+#[test]
+#[should_panic(expected = "T003: no pending upgrade")]
+fn test_execute_upgrade_without_pending_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.execute_upgrade(&admin, &0);
+}
+
+#[test]
+fn test_cancel_upgrade_clears_pending() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.upgrade(&admin, &0, &zero_hash(&env));
+    client.cancel_upgrade(&admin, &1);
+    assert!(client.pending_upgrade().is_none());
+}
+
+#[test]
+fn test_version_stored_on_initialize() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    assert_eq!(client.version(), 0);
+    client.initialize(&admin, &1_000);
+    assert_eq!(client.version(), TOKEN_CONTRACT_VERSION);
+}
+
+#[test]
+fn test_migrate_stamps_version_and_consumes_nonce() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.migrate(&admin, &0);
+    assert_eq!(client.version(), TOKEN_CONTRACT_VERSION);
+    assert_eq!(client.admin_nonce(), 1);
 }
 
 #[test]
@@ -246,7 +321,141 @@ fn test_migrate_non_admin_rejected() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin, &1_000);
-    client.migrate(&Address::generate(&env));
+    client.migrate(&Address::generate(&env), &0);
+}
+
+#[test]
+#[should_panic(expected = "invalid nonce")]
+fn test_migrate_wrong_nonce_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.migrate(&admin, &3);
+}
+
+// ---------------------------------------------------------------------------
+// TOK-15 – max supply cap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_max_supply_defaults_to_uncapped() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    assert_eq!(client.get_max_supply(), 0);
+    client.mint(&admin, &admin, &1_000_000, &0);
+    assert_eq!(client.total_supply(), 1_001_000);
+}
+
+#[test]
+fn test_mint_up_to_cap_succeeds() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.set_max_supply(&admin, &0, &1_500);
+    assert_eq!(client.get_max_supply(), 1_500);
+    client.mint(&admin, &admin, &500, &1);
+    assert_eq!(client.total_supply(), 1_500);
+}
+
+#[test]
+#[should_panic(expected = "T002: max supply exceeded")]
+fn test_mint_over_cap_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.set_max_supply(&admin, &0, &1_500);
+    client.mint(&admin, &admin, &501, &1);
+}
+
+#[test]
+#[should_panic(expected = "not admin")]
+fn test_set_max_supply_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.set_max_supply(&Address::generate(&env), &0, &1_500);
+}
+
+// ---------------------------------------------------------------------------
+// TOK-16 – storage TTL management
+// ---------------------------------------------------------------------------
+
+fn balance_ttl(env: &Env, client: &TokenContractClient, owner: &Address) -> u32 {
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&TokenDataKey::Balance(owner.clone()))
+    })
+}
+
+#[test]
+fn test_balance_ttl_extended_on_set() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.transfer(&admin, &user, &10);
+    assert_eq!(balance_ttl(&env, &client, &user), TTL_EXTEND_TO);
+}
+
+#[test]
+fn test_balance_ttl_extended_on_get() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    // Advance far enough that remaining TTL falls below TTL_THRESHOLD.
+    env.ledger()
+        .with_mut(|l| l.sequence_number += TTL_EXTEND_TO - 6_000_000);
+    assert!(balance_ttl(&env, &client, &admin) < crate::TTL_THRESHOLD);
+    assert_eq!(client.balance(&admin), 1_000);
+    assert_eq!(balance_ttl(&env, &client, &admin), TTL_EXTEND_TO);
+}
+
+#[test]
+fn test_allowance_ttl_extended_to_expiration() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    let exp = env.ledger().sequence() + 1_000;
+    client.approve(&admin, &spender, &300, &exp);
+    let ttl = env.as_contract(&client.address, || {
+        use soroban_sdk::testutils::storage::Temporary as _;
+        env.storage()
+            .temporary()
+            .get_ttl(&TokenDataKey::Allowance(admin.clone(), spender.clone()))
+    });
+    assert!(ttl >= 1_000);
+    assert_eq!(client.allowance(&admin, &spender), 300);
+}
+
+// ---------------------------------------------------------------------------
+// TOK-17 – allowance expiry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_allowance_returns_zero_after_expiry() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    let exp = env.ledger().sequence() + 5;
+    client.approve(&admin, &spender, &300, &exp);
+    assert_eq!(client.allowance(&admin, &spender), 300);
+    env.ledger().with_mut(|l| l.sequence_number = exp + 1);
+    assert_eq!(client.allowance(&admin, &spender), 0);
+}
+
+#[test]
+#[should_panic(expected = "expiration_ledger is in the past")]
+fn test_approve_past_expiration_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    client.approve(&admin, &spender, &300, &99);
 }
 
 // Requires a release WASM build of the token contract:
@@ -267,11 +476,14 @@ fn test_upgrade_preserves_balances_and_supply() {
     client.transfer(&admin, &user, &250);
 
     let new_wasm_hash = env.deployer().upload_contract_wasm(token_wasm::WASM);
-    client.upgrade(&new_wasm_hash, &0);
-    client.migrate(&admin);
+    client.upgrade(&admin, &0, &new_wasm_hash);
+    env.ledger().with_mut(|l| l.timestamp += 86_400);
+    client.execute_upgrade(&admin, &1);
+    client.migrate(&admin, &2);
 
     assert_eq!(client.total_supply(), 1_000);
     assert_eq!(client.balance(&admin), 750);
     assert_eq!(client.balance(&user), 250);
-    assert_eq!(client.admin_nonce(), 1);
+    assert_eq!(client.admin_nonce(), 3);
+    assert_eq!(client.version(), TOKEN_CONTRACT_VERSION);
 }
