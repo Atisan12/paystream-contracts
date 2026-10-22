@@ -15,6 +15,37 @@ export ADMIN_ADDRESS=$(stellar keys address "$ADMIN")
 
 > Every admin call consumes the current admin nonce. **Always read the nonce immediately before each admin call** and never reuse a value — a stale nonce fails with E009.
 
+## 0. Mainnet deployment
+
+Mainnet deploys are **never automatic**. The release workflow only runs a dry-run check against the mainnet RPC on tag push; the real deploy is a separate manual `workflow_dispatch`.
+
+### 0.1 Automatic dry-run (on tag push)
+
+The `mainnet-dry-run` job runs after `release` and executes `stellar contract deploy --dry-run` against the mainnet RPC. It fails the workflow if the dry-run returns a non-zero exit code, catching misconfigured environment variables before any real deploy.
+
+### 0.2 Manual mainnet deploy
+
+Trigger the manual deploy workflow from the Actions tab (or via `gh`):
+
+```bash
+gh workflow run deploy-mainnet.yml --ref <TAG>
+```
+
+Before dispatching, confirm:
+
+- [ ] The `mainnet-dry-run` job passed on the target tag
+- [ ] `MAINNET_RPC_URL`, `MAINNET_NETWORK_PASSPHRASE`, and the deployer identity secrets are set
+- [ ] The WASM hash matches the audited build
+
+Then deploy and verify:
+
+```bash
+export NETWORK=mainnet
+export STREAM_ID=<STREAM_CONTRACT_ID>
+
+stellar contract invoke --id "$STREAM_ID" --source "$ADMIN" --network "$NETWORK" -- version
+```
+
 ## 1. Check admin nonce
 
 ```bash

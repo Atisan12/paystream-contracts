@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      deploy_mainnet:
+        description: 'Deploy to mainnet (manual only)'
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,6 +18,7 @@ env:
 jobs:
   release:
     name: Build & Release WASM
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -163,9 +170,74 @@ jobs:
           git commit -m "docs: update testnet contract IDs for ${GITHUB_REF_NAME}"
           git push origin HEAD:main
 
+  mainnet-dry-run:
+    name: Mainnet deploy dry-run
+    needs: release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      STELLAR_RPC_URL: https://soroban-mainnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: Public Global Stellar Network ; September 2015
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-wasm
+          path: target/wasm32-unknown-unknown/release
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli@${{ env.STELLAR_CLI_VERSION }} --features opt
+
+      - name: Dry-run mainnet deploy
+        env:
+          # Read by the Stellar CLI as the source account; never passed on the command line.
+          STELLAR_ACCOUNT: ${{ secrets.MAINNET_ADMIN_SECRET }}
+        run: |
+          # Fails the job (non-zero exit) if any contract cannot be deployed to mainnet.
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            echo "Dry-run deploying ${wasm} to mainnet"
+            stellar contract deploy --dry-run --wasm "${wasm}"
+          done
+
+  deploy-mainnet:
+    name: Deploy to mainnet (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_mainnet
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      STELLAR_RPC_URL: https://soroban-mainnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: Public Global Stellar Network ; September 2015
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli@${{ env.STELLAR_CLI_VERSION }} --features opt
+
+      - name: Build contracts
+        run: stellar contract build
+
+      - name: Deploy contracts to mainnet
+        env:
+          # Read by the Stellar CLI as the source account; never passed on the command line.
+          STELLAR_ACCOUNT: ${{ secrets.MAINNET_ADMIN_SECRET }}
+        run: |
+          deploy() {
+            stellar contract deploy --wasm "target/wasm32-unknown-unknown/release/$1"
+          }
+          echo "token=$(deploy paystream_token.wasm)"
+          echo "stream=$(deploy paystream_stream.wasm)"
+
   provenance:
     name: SLSA provenance
     needs: release
+    if: github.event_name == 'push'
     permissions:
       actions: read
       id-token: write
