@@ -2,10 +2,8 @@ services:
   build:
     build:
       context: .
-      target: builder
-    volumes:
-      - .:/app
-      - cargo-cache:/usr/local/cargo/registry
+      target: runtime
+    image: ghcr.io/${GITHUB_REPOSITORY:-local}/stream-contract:${IMAGE_TAG:-latest}
 
   test:
     build:
