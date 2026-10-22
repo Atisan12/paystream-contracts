@@ -15,6 +15,11 @@ use crate::storage::{
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, Symbol, Vec};
 
+pub use crate::storage::{TTL_EXTEND_TO, TTL_THRESHOLD};
+
+/// TOK-18: current token contract version, stamped on `initialize` and `migrate`.
+pub const TOKEN_CONTRACT_VERSION: u32 = 1;
+
 /// T001: token arithmetic overflow.
 const ERR_OVERFLOW: &str = "T001: token arithmetic overflow";
 /// T002: token transfers are paused.
@@ -62,6 +67,8 @@ impl TokenContract {
         set_admin(&env, &admin);
         set_balance(&env, &admin, initial_supply);
         set_total_supply(&env, initial_supply);
+        set_version(&env, TOKEN_CONTRACT_VERSION);
+        extend_instance_ttl(&env);
     }
 
     /// Return the total token supply.
@@ -126,6 +133,7 @@ impl TokenContract {
         expiration_ledger: u32,
     ) {
         owner.require_auth();
+        extend_instance_ttl(&env);
         assert!(
             amount == 0 || expiration_ledger >= env.ledger().sequence(),
             "expiration_ledger is in the past"
@@ -133,12 +141,12 @@ impl TokenContract {
         set_allowance(&env, &owner, &spender, amount, expiration_ledger);
     }
 
-    /// Return the allowance granted by `owner` to `spender`.
+    /// Return the allowance granted by `owner` to `spender` (SEP-41).
     ///
     /// # Returns
-    /// `(amount, expiration_ledger)`; `(0, 0)` if no allowance exists.
-    pub fn allowance(env: Env, owner: Address, spender: Address) -> (i128, u32) {
-        allowance(&env, &owner, &spender)
+    /// Remaining allowance; 0 if none exists or it has expired.
+    pub fn allowance(env: Env, owner: Address, spender: Address) -> i128 {
+        allowance(&env, &owner, &spender).0
     }
 
     /// Transfer `amount` tokens from `from` to `to` using `spender`'s allowance.
@@ -187,12 +195,15 @@ impl TokenContract {
     /// - Panics if `nonce` does not match the stored admin nonce
     /// - Panics if `amount` ≤ 0
     /// - T001 if the balance or total supply would overflow
+    /// - T002 if a max supply is set and `total_supply + amount` exceeds it
     pub fn mint(env: Env, admin: Address, to: Address, amount: i128, nonce: u64) {
         admin.require_auth();
         assert_eq!(get_admin(&env), admin, "not admin");
         consume_admin_nonce(&env, nonce);
         assert!(amount > 0, "amount must be positive");
         let new_supply = total_supply(&env).checked_add(amount).expect(ERR_OVERFLOW);
+        let cap = max_supply(&env);
+        assert!(cap == 0 || new_supply <= cap, "{}", ERR_MAX_SUPPLY);
         let to_bal = balance_of(&env, &to)
             .checked_add(amount)
             .expect(ERR_OVERFLOW);
@@ -290,28 +301,89 @@ impl TokenContract {
     /// Admin upgrades the token contract WASM in-place (TOK-10).
     ///
     /// Balances, allowances and total supply live in contract storage and are
-    /// preserved across the upgrade. Call [`migrate`] afterwards.
+    /// preserved across the upgrade. After [`UPGRADE_TIMELOCK`] seconds call
+    /// [`execute_upgrade`], then [`migrate`].
     ///
     /// # Parameters
-    /// - `new_wasm_hash` — 32-byte hash of the uploaded WASM blob
+    /// - `admin` — must match the stored admin (requires auth)
     /// - `nonce` — current admin nonce (replay protection)
+    /// - `new_wasm_hash` — 32-byte hash of the uploaded WASM blob
     ///
     /// # Errors
-    /// - Panics if admin auth fails
+    /// - Panics if `admin` auth fails or does not match stored admin
     /// - Panics if `nonce` does not match the stored admin nonce
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, nonce: u64) {
-        get_admin(&env).require_auth();
+    pub fn upgrade(env: Env, admin: Address, nonce: u64, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
         consume_admin_nonce(&env, nonce);
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        let unlock_time = env.ledger().timestamp() + UPGRADE_TIMELOCK;
+        set_pending_upgrade(
+            &env,
+            &PendingUpgrade {
+                wasm_hash: new_wasm_hash,
+                unlock_time,
+            },
+        );
+        extend_instance_ttl(&env);
     }
 
-    /// Post-upgrade migration hook. Currently a no-op beyond admin verification.
+    /// Apply the upgrade scheduled by [`upgrade`] once its time-lock has elapsed.
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `nonce` does not match the stored admin nonce
+    /// - T003 if no upgrade is pending
+    /// - T004 if the time-lock has not yet elapsed
+    pub fn execute_upgrade(env: Env, admin: Address, nonce: u64) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        consume_admin_nonce(&env, nonce);
+        let pending = get_pending_upgrade(&env).expect(ERR_NO_PENDING_UPGRADE);
+        assert!(
+            env.ledger().timestamp() >= pending.unlock_time,
+            "{}",
+            ERR_UPGRADE_TIMELOCK_ACTIVE
+        );
+        clear_pending_upgrade(&env);
+        env.deployer()
+            .update_current_contract_wasm(pending.wasm_hash);
+    }
+
+    /// Cancel a scheduled upgrade before it is executed.
+    ///
+    /// # Errors
+    /// - Panics if `admin` auth fails or does not match stored admin
+    /// - Panics if `nonce` does not match the stored admin nonce
+    /// - T003 if no upgrade is pending
+    pub fn cancel_upgrade(env: Env, admin: Address, nonce: u64) {
+        admin.require_auth();
+        assert_eq!(get_admin(&env), admin, "not admin");
+        consume_admin_nonce(&env, nonce);
+        get_pending_upgrade(&env).expect(ERR_NO_PENDING_UPGRADE);
+        clear_pending_upgrade(&env);
+    }
+
+    /// Return the upgrade scheduled by [`upgrade`], if any.
+    pub fn pending_upgrade(env: Env) -> Option<PendingUpgrade> {
+        get_pending_upgrade(&env)
+    }
+
+    /// Post-upgrade migration hook: stamps [`TOKEN_CONTRACT_VERSION`].
     ///
     /// # Errors
     /// - Panics if `admin` auth fails or does not match the stored admin
-    pub fn migrate(env: Env, admin: Address) {
+    /// - Panics if `nonce` does not match the stored admin nonce
+    pub fn migrate(env: Env, admin: Address, nonce: u64) {
         admin.require_auth();
         assert_eq!(get_admin(&env), admin, "not admin");
+        consume_admin_nonce(&env, nonce);
+        set_version(&env, TOKEN_CONTRACT_VERSION);
+        extend_instance_ttl(&env);
+    }
+
+    /// Return the stored contract version; 0 if never stamped.
+    pub fn version(env: Env) -> u32 {
+        version(&env)
     }
 
     /// Step 1 of two-step admin transfer: current admin nominates `new_admin`.

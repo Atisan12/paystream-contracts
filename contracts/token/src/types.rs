@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use soroban_sdk::{contracttype, Address};
+use soroban_sdk::{contracttype, Address, BytesN};
 
 #[contracttype]
 pub enum TokenDataKey {

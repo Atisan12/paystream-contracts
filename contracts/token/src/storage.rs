@@ -1,27 +1,61 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::types::TokenDataKey;
+use crate::types::{PendingUpgrade, TokenDataKey};
 use soroban_sdk::{Address, Env};
 
-pub fn balance_of(env: &Env, owner: &Address) -> i128 {
+/// TOK-16: extend TTL when remaining TTL drops below ~1 year.
+pub const TTL_THRESHOLD: u32 = 6_307_200;
+/// TOK-16: extend TTL to ~2 years.
+pub const TTL_EXTEND_TO: u32 = 12_614_400;
+
+/// TOK-18: 24-hour upgrade time-lock, in seconds.
+pub const UPGRADE_TIMELOCK: u64 = 86_400;
+
+pub fn extend_instance_ttl(env: &Env) {
     env.storage()
-        .persistent()
-        .get(&TokenDataKey::Balance(owner.clone()))
-        .unwrap_or(0)
+        .instance()
+        .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+pub fn balance_of(env: &Env, owner: &Address) -> i128 {
+    let key = TokenDataKey::Balance(owner.clone());
+    let balance = env.storage().persistent().get(&key);
+    if balance.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    balance.unwrap_or(0)
 }
 
 pub fn set_balance(env: &Env, owner: &Address, amount: i128) {
+    let key = TokenDataKey::Balance(owner.clone());
+    env.storage().persistent().set(&key, &amount);
     env.storage()
         .persistent()
-        .set(&TokenDataKey::Balance(owner.clone()), &amount);
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 /// Returns `(amount, expiration_ledger)`; `(0, 0)` if no allowance is stored.
+///
+/// Expired allowances (`ledger > expiration_ledger`) report an amount of 0.
 pub fn allowance(env: &Env, owner: &Address, spender: &Address) -> (i128, u32) {
-    env.storage()
-        .temporary()
-        .get(&TokenDataKey::Allowance(owner.clone(), spender.clone()))
-        .unwrap_or((0, 0))
+    let key = TokenDataKey::Allowance(owner.clone(), spender.clone());
+    let (amount, expiration_ledger): (i128, u32) =
+        env.storage().temporary().get(&key).unwrap_or((0, 0));
+    if env.ledger().sequence() > expiration_ledger {
+        return (0, expiration_ledger);
+    }
+    extend_allowance_ttl(env, &key, expiration_ledger);
+    (amount, expiration_ledger)
+}
+
+/// Keep the temporary allowance entry alive until its expiration ledger.
+fn extend_allowance_ttl(env: &Env, key: &TokenDataKey, expiration_ledger: u32) {
+    let live_for = expiration_ledger.saturating_sub(env.ledger().sequence());
+    if live_for > 0 && env.storage().temporary().has(key) {
+        env.storage().temporary().extend_ttl(key, live_for, live_for);
+    }
 }
 
 pub fn set_allowance(
@@ -31,10 +65,11 @@ pub fn set_allowance(
     amount: i128,
     expiration_ledger: u32,
 ) {
-    env.storage().temporary().set(
-        &TokenDataKey::Allowance(owner.clone(), spender.clone()),
-        &(amount, expiration_ledger),
-    );
+    let key = TokenDataKey::Allowance(owner.clone(), spender.clone());
+    env.storage()
+        .temporary()
+        .set(&key, &(amount, expiration_ledger));
+    extend_allowance_ttl(env, &key, expiration_ledger);
 }
 
 pub fn total_supply(env: &Env) -> i128 {
