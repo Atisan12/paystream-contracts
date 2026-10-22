@@ -1,3 +1,4 @@
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks create-stream
 .PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks stream-status
 
 build:
@@ -62,6 +63,8 @@ setup-hooks:
 	@echo "The hook will run 'cargo fmt --check' and 'cargo clippy' before each commit."
 	@echo "To skip the hook, use: git commit --no-verify"
 
+create-stream:
+	./scripts/create-stream-wizard.sh
 stream-status:
 	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(EMPLOYER)" ]; then \
 		echo "Usage: make stream-status CONTRACT_ID=<ID> EMPLOYER=<ADDRESS> [NETWORK=testnet]"; \

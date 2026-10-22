@@ -728,6 +728,33 @@ stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testn
   -- update_rate --employer <EMPLOYER_ADDRESS> --stream_id 1 --new_rate 20
 ```
 
+**Worked Example (numeric):**
+
+Initial state:
+- Stream created at time T=0 with deposit=10,000, rate=10 tokens/sec, no stop time
+- At T=0: withdrawn=0, pending_accrual=0
+
+Period 1 (rate A = 10/s):
+- Advance to T=100: 100 seconds elapsed at old rate
+- `claimable()` = 100 × 10 = 1,000 tokens
+
+Rate change:
+- Call `update_rate` at T=100 to set rate B = 20/s
+- Before applying new rate, accrued 1,000 tokens are banked into `pending_accrual`
+- After update: `pending_accrual` = 1,000, `rate_per_second` = 20, `last_withdraw_time` = 100
+
+Period 2 (rate B = 20/s):
+- Advance to T=150: 50 more seconds at new rate (20/s)
+- New accrual = 50 × 20 = 1,000 tokens
+- Total `claimable()` = `pending_accrual` + new accrual = 1,000 + 1,000 = 2,000
+
+Withdraw:
+- `withdraw()` at T=150 pays out 2,000 tokens total (covering both periods)
+- After withdraw: `withdrawn` = 2,000, `pending_accrual` = 0
+- Future accrual resumes from T=150 at 20/s
+
+*This matches `test_update_rate_withdraw_clears_pending_accrual`.*
+
 ---
 
 ### `update_stop_time`

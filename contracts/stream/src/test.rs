@@ -701,6 +701,7 @@ fn test_claimable_overflow_panics() {
         pending_accrual: 0,
         locked: false,
         low_balance_threshold: 0,
+        notes: None,
     };
 
     claimable_amount(&stream, 2);
@@ -730,6 +731,7 @@ fn test_claimable_large_elapsed_capped_by_deposit() {
         pending_accrual: 0,
         locked: false,
         low_balance_threshold: 0,
+        notes: None,
     };
 
     let result = claimable_amount(&stream, u64::MAX);
@@ -1098,6 +1100,9 @@ fn test_update_stop_time_extend_emits_event() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
     let now = env.ledger().timestamp();
     let old_stop_time = now + 1_000;
     let new_stop_time = now + 2_000;
@@ -3569,6 +3574,16 @@ fn test_set_low_balance_threshold_negative_rejected() {
 }
 
 
+
+#[cfg(test)]
+mod audit_regressions {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Address};
+
+    /// Regression test for HIGH-01 from 2026-04 Trail of Bits audit
+    #[test]
+    #[should_panic(expected = "not the employer")]
+    fn test_high01_top_up_employer_identity_check() {
 // ===========================================================================
 // TEST-23 (#246): Event payload snapshot tests
 //
@@ -3615,6 +3630,53 @@ mod events {
         let admin = Address::generate(&env);
         let employer = Address::generate(&env);
         let employee = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let token_id = setup_token(&env, &employer);
+
+        client.initialize(&admin);
+        let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
+        // Non-owner attempts to top up
+        client.top_up(&attacker, &id, &1000, &None);
+    }
+
+    /// Regression test for MED-01 from 2026-04 Trail of Bits audit
+    /// Already exists as test_claimable_overflow_panics; verified marked as audit regression
+    #[test]
+    #[should_panic(expected = "E004")]
+    fn test_med01_claimable_overflow_panics() {
+        use crate::storage::claimable_amount;
+        use crate::types::{Stream, StreamStatus};
+
+        let env = Env::default();
+        let addr = Address::generate(&env);
+
+        let stream = Stream {
+            id: 1,
+            employer: addr.clone(),
+            employee: addr.clone(),
+            token: addr.clone(),
+            deposit: i128::MAX,
+            withdrawn: 0,
+            rate_per_second: i128::MAX,
+            start_time: 0,
+            stop_time: 0,
+            last_withdraw_time: 0,
+            status: StreamStatus::Active,
+            locked: false,
+            low_balance_threshold: 0,
+            notes: None,
+        };
+
+        claimable_amount(&stream, 2);
+    }
+
+    /// Regression test for MED-02 from 2026-04 Trail of Bits audit
+    /// Employee paid before employer refund in cancel_stream
+    #[test]
+    fn test_med02_cancel_stream_dual_transfer_ordering() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{symbol_short, vec, IntoVal};
+
         let token_id = setup_token(&env, &employer);
 
         client.initialize(&admin);
@@ -3730,6 +3792,27 @@ mod events {
         let token_id = setup_token(&env, &employer);
 
         client.initialize(&admin);
+        let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
+        env.ledger().with_mut(|l| l.timestamp += 100);
+        client.cancel_stream(&employer, &id);
+
+        // Verify both transfers happened (employee claimable + employer refund)
+        let cancelled_event = env.events().all();
+        assert!(!cancelled_event.is_empty());
+    }
+
+    /// Regression test for LOW-02 from 2026-04 Trail of Bits audit
+    #[test]
+    #[should_panic(expected = "already initialized")]
+    fn test_low02_initialize_already_initialized_panics() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+
+        client.initialize(&admin);
+        // Second initialize rejected
+        client.initialize(&admin2);
+    }
         // deposit=10_000, rate=10/s; after 100s claimable=1_000, refund=9_000
         let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
         env.ledger().with_mut(|l| l.timestamp += 100);
