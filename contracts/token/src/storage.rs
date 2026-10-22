@@ -1,34 +1,61 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::types::{TokenDataKey, TokenMetadata};
-use soroban_sdk::{Address, Env, String};
+use crate::types::{PendingUpgrade, TokenDataKey};
+use soroban_sdk::{Address, Env};
 
-/// Defaults returned by `decimals` / `name` / `symbol` until the admin calls
-/// `set_metadata`. 7 decimals matches Stellar classic assets and the SAC.
-pub const DEFAULT_DECIMALS: u32 = 7;
-pub const DEFAULT_NAME: &str = "PayStream Token";
-pub const DEFAULT_SYMBOL: &str = "PST";
+/// TOK-16: extend TTL when remaining TTL drops below ~1 year.
+pub const TTL_THRESHOLD: u32 = 6_307_200;
+/// TOK-16: extend TTL to ~2 years.
+pub const TTL_EXTEND_TO: u32 = 12_614_400;
+
+/// TOK-18: 24-hour upgrade time-lock, in seconds.
+pub const UPGRADE_TIMELOCK: u64 = 86_400;
+
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+}
 
 pub fn balance_of(env: &Env, owner: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&TokenDataKey::Balance(owner.clone()))
-        .unwrap_or(0)
+    let key = TokenDataKey::Balance(owner.clone());
+    let balance = env.storage().persistent().get(&key);
+    if balance.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    balance.unwrap_or(0)
 }
 
 pub fn set_balance(env: &Env, owner: &Address, amount: i128) {
+    let key = TokenDataKey::Balance(owner.clone());
+    env.storage().persistent().set(&key, &amount);
     env.storage()
         .persistent()
-        .set(&TokenDataKey::Balance(owner.clone()), &amount);
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
 /// Returns `(amount, expiration_ledger)`; `(0, 0)` if no allowance is stored.
-/// The amount is returned even if expired; callers decide how to treat expiry.
+///
+/// Expired allowances (`ledger > expiration_ledger`) report an amount of 0.
 pub fn allowance(env: &Env, owner: &Address, spender: &Address) -> (i128, u32) {
-    env.storage()
-        .temporary()
-        .get(&TokenDataKey::Allowance(owner.clone(), spender.clone()))
-        .unwrap_or((0, 0))
+    let key = TokenDataKey::Allowance(owner.clone(), spender.clone());
+    let (amount, expiration_ledger): (i128, u32) =
+        env.storage().temporary().get(&key).unwrap_or((0, 0));
+    if env.ledger().sequence() > expiration_ledger {
+        return (0, expiration_ledger);
+    }
+    extend_allowance_ttl(env, &key, expiration_ledger);
+    (amount, expiration_ledger)
+}
+
+/// Keep the temporary allowance entry alive until its expiration ledger.
+fn extend_allowance_ttl(env: &Env, key: &TokenDataKey, expiration_ledger: u32) {
+    let live_for = expiration_ledger.saturating_sub(env.ledger().sequence());
+    if live_for > 0 && env.storage().temporary().has(key) {
+        env.storage().temporary().extend_ttl(key, live_for, live_for);
+    }
 }
 
 pub fn set_allowance(
@@ -42,32 +69,7 @@ pub fn set_allowance(
     env.storage()
         .temporary()
         .set(&key, &(amount, expiration_ledger));
-    // SEP-41: keep the allowance entry alive until its expiration ledger.
-    if amount > 0 {
-        let live_for = expiration_ledger.saturating_sub(env.ledger().sequence());
-        if live_for > 0 {
-            env.storage().temporary().extend_ttl(&key, live_for, live_for);
-        }
-    }
-}
-
-pub fn metadata(env: &Env) -> TokenMetadata {
-    env.storage()
-        .instance()
-        .get(&TokenDataKey::Metadata)
-        .unwrap_or_else(|| TokenMetadata {
-            decimal: DEFAULT_DECIMALS,
-            name: String::from_str(env, DEFAULT_NAME),
-            symbol: String::from_str(env, DEFAULT_SYMBOL),
-        })
-}
-
-pub fn has_metadata(env: &Env) -> bool {
-    env.storage().instance().has(&TokenDataKey::Metadata)
-}
-
-pub fn set_metadata(env: &Env, metadata: &TokenMetadata) {
-    env.storage().instance().set(&TokenDataKey::Metadata, metadata);
+    extend_allowance_ttl(env, &key, expiration_ledger);
 }
 
 pub fn total_supply(env: &Env) -> i128 {
@@ -126,4 +128,15 @@ pub fn consume_admin_nonce(env: &Env, nonce: u64) {
     env.storage()
         .instance()
         .set(&TokenDataKey::AdminNonce, &(current + 1));
+}
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&TokenDataKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&TokenDataKey::Paused, &paused);
 }

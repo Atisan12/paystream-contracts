@@ -340,6 +340,8 @@ Looking for tasks to contribute to?
 3. Stuck? Ping a maintainer in [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions) — every good first issue has a mentor available.
 4. Keep the PR small and reference the issue with `Closes #<number>`.
 
+New to Rust, Soroban or open source? Start with the step-by-step [First Contribution Guide](docs/first-contribution.md).
+
 ---
 
 ## Claiming a Bounty

@@ -1562,7 +1562,7 @@ stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
 
 ### `admin_nonce`
 
-Return the admin nonce that the next `mint` call must supply.
+Return the admin nonce that the next admin-gated call (`mint`, `mint_to_batch`, `propose_admin`, `pause_token`, `unpause_token`, `upgrade`) must supply. `get_admin_nonce` is an alias with identical behaviour.
 
 **Caller:** Anyone
 
@@ -1571,8 +1571,60 @@ Return the admin nonce that the next `mint` call must supply.
 **Example:**
 ```bash
 stellar contract invoke --id <TOKEN_ID> --source <ANY_KEY> --network testnet \
-  -- admin_nonce
+  -- get_admin_nonce
 ```
+
+---
+
+### `mint_to_batch`
+
+Admin mints tokens to up to 50 recipients in one call. A single admin nonce is consumed for the whole batch, and the batch is all-or-nothing. Emits one `mint` event per recipient.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `nonce` | `u64` | Current admin nonce; consumed once |
+| `recipients` | `Vec<(Address, i128)>` | Recipient / amount pairs (each amount > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored admin nonce
+- T003 if more than 50 recipients are supplied
+- Panics if any amount ≤ 0
+- T001 if any balance or the total supply would overflow (whole batch reverts)
+
+---
+
+### `pause_token` / `unpause_token`
+
+Admin pauses or resumes all token movement. While paused, `transfer`, `transfer_from`, `burn` and `burn_from` panic with T002. Consumes the admin nonce and emits `token_paused` with data `true` (pause) or `false` (unpause).
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `nonce` | `u64` | Current admin nonce |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored admin nonce
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- pause_token --admin <ADMIN_ADDRESS> --nonce 0
+```
+
+### `is_paused`
+
+Return whether the token is paused. **Caller:** Anyone. **Returns:** `bool`
 
 ---
 
@@ -1585,13 +1637,17 @@ Step 1 of two-step admin transfer: the current admin nominates a new admin.
 | Parameter | Type | Description |
 |---|---|---|
 | `new_admin` | `Address` | Address nominated as the next admin |
+| `nonce` | `u64` | Current admin nonce; consumed on success |
 
 **Returns:** nothing
+
+**Errors:**
+- Panics if `nonce` does not match the stored admin nonce
 
 **Example:**
 ```bash
 stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
-  -- propose_admin --new_admin <NEW_ADMIN_ADDRESS>
+  -- propose_admin --new_admin <NEW_ADMIN_ADDRESS> --nonce 0
 ```
 
 ---
@@ -1652,6 +1708,9 @@ Burn tokens from the caller's own balance, reducing total supply.
 **Errors:**
 - Panics if `amount` ≤ 0
 - Panics if `from` has insufficient balance
+- T002 if the token is paused
+
+Emits `burn` with topics `("burn", from)` and data `amount`.
 
 **Example:**
 ```bash
@@ -1680,6 +1739,9 @@ Burn tokens on behalf of `from` using an existing allowance.
 - Panics if the allowance has expired
 - Panics if allowance is insufficient
 - Panics if `from` has insufficient balance
+- T002 if the token is paused
+
+Deducts `amount` from both `from`'s balance and `spender`'s allowance. Emits `burn` with topics `("burn", from)` and data `amount`.
 
 **Example:**
 ```bash
@@ -1814,8 +1876,9 @@ Keep this table in sync with that file (see [CONTRIBUTING.md](../CONTRIBUTING.md
 | E009 | `ERR_BAD_NONCE` | Invalid admin nonce | `propose_admin`, `pause_contract`, `unpause_contract`, `set_min_deposit`, `set_protocol_fee`, `upgrade`, `propose_upgrade`, `execute_upgrade`, `cancel_upgrade` | Read the current value with `admin_nonce` and pass it as `nonce` |
 | E029 | `ERR_BATCH_TOO_LARGE` | Batch contains more than 50 streams | `create_streams_batch`, `cancel_streams_batch` | Split the operation into batches of at most 50 streams |
 | E030 | `ERR_INVALID_STOP_TIME` | Nonzero stop time precedes last withdrawal | `update_stop_time` | Use 0 or a timestamp at/after `last_withdraw_time` |
-| E035 | `ERR_CLIFF_AFTER_STOP` | `cliff_time` is after `stop_time` | `create_stream`, `create_streams_batch`, `create_stream_from_template` | Use a cliff at or before `stop_time`, or `stop_time = 0` |
-| T001 | `ERR_OVERFLOW` (token) | Token arithmetic overflow | Token `mint`, `transfer`, `transfer_from` | Use smaller amounts |
+| T001 | `ERR_OVERFLOW` (token) | Token arithmetic overflow | Token `mint`, `mint_to_batch`, `transfer`, `transfer_from` | Use smaller amounts |
+| T002 | `ERR_PAUSED` (token) | Token is paused | Token `transfer`, `transfer_from`, `burn`, `burn_from` | Wait for the admin to call `unpause_token` |
+| T003 | `ERR_BATCH_TOO_LARGE` (token) | More than 50 recipients | Token `mint_to_batch` | Split into batches of at most 50 |
 
 ---
 
