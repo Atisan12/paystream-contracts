@@ -37,3 +37,41 @@ jobs:
 
       - name: Run proptest fuzz (500 000 iterations) — admin nonce
         run: cargo test --package paystream-stream-fuzz --bin fuzz_admin_nonce
+
+  token-fuzz:
+    name: Proptest fuzz token (TOK-19)
+    runs-on: ubuntu-latest
+    env:
+      # Each target runs a fixed number of cases sized to finish in ~30 s on
+      # ubuntu-latest; the step timeout catches a hang or runaway case.
+      PROPTEST_CASES: "64"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-token-fuzz-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-token-fuzz-
+
+      - name: Build token fuzz targets
+        run: cargo test --package paystream-token-fuzz --bins --no-run
+
+      - name: Fuzz transfer (30 s budget)
+        timeout-minutes: 2
+        run: cargo test --package paystream-token-fuzz --bin fuzz_transfer
+
+      - name: Fuzz approve / transfer_from / burn_from (30 s budget)
+        timeout-minutes: 2
+        run: cargo test --package paystream-token-fuzz --bin fuzz_allowance
+
+      - name: Fuzz mint / burn near i128::MAX (30 s budget)
+        timeout-minutes: 2
+        run: cargo test --package paystream-token-fuzz --bin fuzz_mint_burn

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![deny(missing_docs)]
+
 use crate::types::{
-    AutoTopupConfig, DataKey, PendingUpgrade, Stream, StreamParams, StreamStatus, ERR_ADMIN_NOT_SET, ERR_BAD_NONCE,
+    AutoTopupConfig, DataKey, LinearVestSchedule, PendingUpgrade, ProtocolFeeConfig, Stream,
+    StreamParams, StreamStatus, StreamType, ERR_ADMIN_NOT_SET, ERR_BAD_NONCE,
     ERR_OVERFLOW, ERR_RATE_LIMIT_EXCEEDED, DEFAULT_MAX_CREATES_PER_LEDGER,
 };
 use soroban_sdk::{Address, BytesN, Env, Vec};
@@ -17,6 +20,10 @@ pub const DEFAULT_MIN_DEPOSIT: i128 = 10_000;
 /// Default: 7 days = 604_800 s. Admin-callable expire_streams skips streams that
 /// still have unclaimed tokens or that have not yet crossed stop_time + GRACE_PERIOD.
 pub const GRACE_PERIOD: u64 = 604_800; // 7 days
+
+/// Minimum waiting period (in seconds) after a stream reaches Cancelled or
+/// Exhausted before it may be archived. Default: 30 days = 2_592_000 s.
+pub const ARCHIVE_WAIT_PERIOD: u64 = 2_592_000;
 
 /// Persistent storage TTL thresholds (in ledgers).
 /// Stellar produces ~1 ledger/5 s → 1 year ≈ 6_307_200 ledgers.
@@ -122,7 +129,7 @@ pub fn set_min_deposit(env: &Env, amount: i128) {
 }
 
 /// Return the configured fee and treasury, or `(0, None)` when unset.
-pub fn get_protocol_fee(env: &Env) -> (u16, Option<Address>) {
+pub fn get_protocol_fee(env: &Env) -> (u32, Option<Address>) {
     match env
         .storage()
         .instance()
@@ -134,7 +141,7 @@ pub fn get_protocol_fee(env: &Env) -> (u16, Option<Address>) {
 }
 
 /// Store the configured protocol fee and treasury address.
-pub fn set_protocol_fee(env: &Env, fee_bps: u16, treasury: &Address) {
+pub fn set_protocol_fee(env: &Env, fee_bps: u32, treasury: &Address) {
     env.storage().instance().set(
         &DataKey::ProtocolFee,
         &ProtocolFeeConfig {
@@ -295,7 +302,7 @@ pub fn index_employer_stream(env: &Env, employer: &Address, stream_id: u64) {
 /// Extends TTL on read (matching the `load_stream` pattern) so that the index
 /// does not expire for employers with long-running streams and no new stream
 /// creation activity (SC-15).
-pub fn get_employer_streams(env: &Env, employer: &Address) -> Vec<u64> {
+pub fn stream_ids_by_employer(env: &Env, employer: &Address) -> Vec<u64> {
     let key = DataKey::EmployerStreams(employer.clone());
     let ids: Vec<u64> = env
         .storage()
@@ -355,7 +362,7 @@ pub fn index_employee_stream(env: &Env, employee: &Address, stream_id: u64) {
 /// Extends TTL on read (matching the `load_stream` pattern) so that the index
 /// does not expire for employees with long-running streams and no new stream
 /// creation activity (SC-15).
-pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
+pub fn stream_ids_by_employee(env: &Env, employee: &Address) -> Vec<u64> {
     let key = DataKey::EmployeeStreams(employee.clone());
     let ids: Vec<u64> = env
         .storage()
@@ -405,6 +412,7 @@ pub fn get_token_streams(env: &Env, token: &Address) -> Vec<u64> {
     ids
 }
 
+/// Return the auto top-up configuration for `stream_id`, if one is set.
 pub fn get_auto_topup(env: &Env, stream_id: u64) -> Option<AutoTopupConfig> {
     let key = DataKey::AutoTopup(stream_id);
     let config: Option<AutoTopupConfig> = env.storage().persistent().get(&key);
@@ -510,6 +518,15 @@ pub fn index_stream_by_timestamp(env: &Env, timestamp: u64, stream_id: u64) {
         .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }
 
+fn contains_id(ids: &Vec<u64>, needle: u64) -> bool {
+    for current in ids.iter() {
+        if current == needle {
+            return true;
+        }
+    }
+    false
+}
+
 /// Return all stream IDs created in the half-open range [`from_ts`, `to_ts`).
 ///
 /// Iterates every day-bucket that overlaps the range and accumulates the IDs.
@@ -523,21 +540,39 @@ pub fn index_stream_by_timestamp(env: &Env, timestamp: u64, stream_id: u64) {
 /// # Returns
 /// `Vec<u64>` of stream IDs; empty if no streams were created in the range.
 pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
+    get_streams_in_time_range(env, from_ts, to_ts)
+}
+
+/// Return all stream IDs created in the time range [`from_ts`, `to_ts`], capped at
+/// 30 days and sorted ascending by stream ID.
+///
+/// The query is implemented against the day-bucket timestamp index and then
+/// normalised to remove duplicates and a stable ascending order for indexer
+/// catch-up workloads.
+pub fn get_streams_in_time_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
     let mut result: Vec<u64> = Vec::new(env);
     if from_ts >= to_ts {
         return result;
     }
+
+    let max_window = 30_u64.saturating_mul(SECONDS_PER_DAY);
+    let effective_to_ts = if to_ts.saturating_sub(from_ts) > max_window {
+        from_ts.saturating_add(max_window)
+    } else {
+        to_ts
+    };
+
     let start_bucket = day_bucket(from_ts);
-    // to_ts is exclusive; the last bucket to check is the one that contains
-    // the timestamp just before to_ts.
-    let end_bucket = day_bucket(to_ts.saturating_sub(1));
+    let end_bucket = day_bucket(effective_to_ts.saturating_sub(1));
 
     let mut bucket = start_bucket;
     loop {
         let key = DataKey::StreamsByTimestamp(bucket);
         if let Some(ids) = env.storage().persistent().get::<DataKey, Vec<u64>>(&key) {
             for id in ids.iter() {
-                result.push_back(id);
+                if !contains_id(&result, id) {
+                    result.push_back(id);
+                }
             }
         }
         if bucket >= end_bucket {
@@ -545,7 +580,29 @@ pub fn get_streams_in_range(env: &Env, from_ts: u64, to_ts: u64) -> Vec<u64> {
         }
         bucket += 1;
     }
-    result
+
+    let mut sorted: Vec<u64> = Vec::new(env);
+    for id in result.iter() {
+        let mut insert_at = 0u32;
+        while insert_at < sorted.len() && sorted.get(insert_at).unwrap() < id {
+            insert_at += 1;
+        }
+
+        let mut updated: Vec<u64> = Vec::new(env);
+        let mut idx = 0u32;
+        while idx < insert_at {
+            updated.push_back(sorted.get(idx).unwrap());
+            idx += 1;
+        }
+        updated.push_back(id);
+        while idx < sorted.len() {
+            updated.push_back(sorted.get(idx).unwrap());
+            idx += 1;
+        }
+        sorted = updated;
+    }
+
+    sorted
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +673,35 @@ pub fn save_template(env: &Env, employer: &Address, template_id: u32, params: &S
     index_template(env, employer, template_id);
 }
 
+/// Delete a stream template and drop it from `employer`'s index (PROD-20).
+///
+/// Returns `false` when no template exists for `(employer, template_id)`.
+pub fn delete_template(env: &Env, employer: &Address, template_id: u32) -> bool {
+    let key = DataKey::Template(employer.clone(), template_id);
+    if !env.storage().persistent().has(&key) {
+        return false;
+    }
+    env.storage().persistent().remove(&key);
+
+    let ids_key = DataKey::TemplateIds(employer.clone());
+    let ids = get_template_ids(env, employer);
+    let mut kept = Vec::new(env);
+    for id in ids.iter() {
+        if id != template_id {
+            kept.push_back(id);
+        }
+    }
+    if kept.is_empty() {
+        env.storage().persistent().remove(&ids_key);
+    } else {
+        env.storage().persistent().set(&ids_key, &kept);
+        env.storage()
+            .persistent()
+            .extend_ttl(&ids_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    true
+}
+
 /// Load a stream template.
 pub fn load_template(env: &Env, employer: &Address, template_id: u32) -> Option<StreamParams> {
     let key = DataKey::Template(employer.clone(), template_id);
@@ -626,4 +712,217 @@ pub fn load_template(env: &Env, employer: &Address, template_id: u32) -> Option<
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
     }
     params
+}
+
+// ---------------------------------------------------------------------------
+// Cliff vesting helpers (PROD-17)
+// ---------------------------------------------------------------------------
+
+/// Persist the cliff timestamp for `stream_id`.
+pub fn set_stream_cliff(env: &Env, stream_id: u64, cliff_time: u64) {
+    let key = DataKey::StreamCliff(stream_id);
+    env.storage().persistent().set(&key, &cliff_time);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+}
+
+/// Return the cliff timestamp for `stream_id`, if the stream has one.
+pub fn get_stream_cliff(env: &Env, stream_id: u64) -> Option<u64> {
+    env.storage().persistent().get(&DataKey::StreamCliff(stream_id))
+}
+
+/// Timestamp from which accrual (re)starts for `stream_id` at `now`.
+///
+/// Every place that resets `last_withdraw_time` goes through this, so a
+/// stream that is withdrawn from, paused/resumed or re-rated before its cliff
+/// still accrues nothing until the cliff has passed.
+pub fn accrual_start(env: &Env, stream_id: u64, now: u64) -> u64 {
+    match get_stream_cliff(env, stream_id) {
+        Some(cliff) if cliff > now => cliff,
+        _ => now,
+    }
+}
+
+/// Mark the cliff as reached. Returns `true` only the first time it is
+/// called after the cliff has passed (used to emit `cliff_reached` once).
+pub fn mark_cliff_reached(env: &Env, stream_id: u64, now: u64) -> Option<u64> {
+    let cliff = get_stream_cliff(env, stream_id)?;
+    if now < cliff {
+        return None;
+    }
+    let key = DataKey::CliffReached(stream_id);
+    if env.storage().persistent().has(&key) {
+        return None;
+    }
+    env.storage().persistent().set(&key, &true);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    Some(cliff)
+}
+
+// Restored from ce6fe77 (dropped by a merge).
+/// Record the ledger timestamp at which a stream entered a terminal
+/// (Cancelled or Exhausted) state, used to enforce the archive waiting period.
+pub fn set_stream_ended_at(env: &Env, stream_id: u64, ended_at: u64) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::StreamEndedAt(stream_id), &ended_at);
+}
+
+// Restored from a74e8f6 (dropped by a merge).
+/// Return all stream IDs paying `employee`.
+///
+/// Extends TTL on read (matching the `load_stream` pattern) so that the index
+/// does not expire for employees with long-running streams and no new stream
+/// creation activity (SC-15).
+pub fn get_employee_streams(env: &Env, employee: &Address) -> Vec<u64> {
+    let key = DataKey::EmployeeStreams(employee.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}
+
+// Restored from a74e8f6 (dropped by a merge).
+/// Return all stream IDs owned by `employer`.
+///
+/// Extends TTL on read (matching the `load_stream` pattern) so that the index
+/// does not expire for employers with long-running streams and no new stream
+/// creation activity (SC-15).
+pub fn get_employer_streams(env: &Env, employer: &Address) -> Vec<u64> {
+    let key = DataKey::EmployerStreams(employer.clone());
+    let ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+    ids
+}
+
+// Restored from a97bb5d (dropped by a merge).
+/// Return the admin-configured maximum number of streams an employer may
+/// create in a single ledger.  Defaults to [`DEFAULT_MAX_CREATES_PER_LEDGER`]
+/// (50) if never set.
+pub fn get_max_creates_per_ledger(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxCreatesPerLedger)
+        .unwrap_or(DEFAULT_MAX_CREATES_PER_LEDGER)
+}
+
+// Restored from a97bb5d (dropped by a merge).
+/// Persist a new value for the per-ledger stream creation cap.
+pub fn set_max_creates_per_ledger(env: &Env, max: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::MaxCreatesPerLedger, &max);
+}
+
+// Restored from a97bb5d (dropped by a merge).
+/// Enforce the per-employer, per-ledger rate limit and increment the counter.
+///
+/// The function reads the last ledger sequence stored for `employer`.  If it
+/// matches the current ledger the existing count is used; otherwise (new ledger
+/// or first call) the count resets to 0.  It then asserts `count + delta <=
+/// max` before writing the updated count back to temporary storage.
+///
+/// Both keys are stored in **temporary** storage so they automatically expire
+/// after one ledger and never accumulate persistent storage rent.
+///
+/// # Parameters
+/// - `env` — Soroban environment
+/// - `employer` — address being rate-limited
+/// - `delta` — number of streams being created in this call (1 for
+///   `create_stream`, `params.len()` for `create_streams_batch`)
+///
+/// # Panics
+/// - E030 if `count + delta > max`
+pub fn check_and_increment_create_rate(env: &Env, employer: &Address, delta: u32) {
+    let current_ledger = env.ledger().sequence();
+    let max = get_max_creates_per_ledger(env);
+
+    let last_ledger: u32 = env
+        .storage()
+        .temporary()
+        .get(&DataKey::LastCreateLedger(employer.clone()))
+        .unwrap_or(0);
+
+    let count: u32 = if last_ledger == current_ledger {
+        env.storage()
+            .temporary()
+            .get(&DataKey::CreateCountThisLedger(employer.clone()))
+            .unwrap_or(0)
+    } else {
+        // New ledger — the counter resets.
+        0
+    };
+
+    assert!(
+        count.saturating_add(delta) <= max,
+        "{}",
+        ERR_RATE_LIMIT_EXCEEDED
+    );
+
+    // Write back the updated ledger marker and count.  TTL of 2 ledgers is
+    // sufficient — the keys only need to survive until the next ledger closes.
+    let new_count = count + delta;
+    env.storage()
+        .temporary()
+        .set(&DataKey::LastCreateLedger(employer.clone()), &current_ledger);
+    env.storage()
+        .temporary()
+        .set(&DataKey::CreateCountThisLedger(employer.clone()), &new_count);
+    env.storage().temporary().extend_ttl(
+        &DataKey::LastCreateLedger(employer.clone()),
+        2,
+        2,
+    );
+    env.storage().temporary().extend_ttl(
+        &DataKey::CreateCountThisLedger(employer.clone()),
+        2,
+        2,
+    );
+}
+
+// Restored from ce6fe77 (dropped by a merge).
+/// Return the timestamp at which a stream entered a terminal state, if recorded.
+pub fn get_stream_ended_at(env: &Env, stream_id: u64) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::StreamEndedAt(stream_id))
+}
+
+// Restored from ce6fe77 (dropped by a merge).
+/// Load a stream from persistent storage, falling back to temporary (archived)
+/// storage so that archived streams are returned transparently by [`get_stream`].
+pub fn load_stream_any(env: &Env, id: u64) -> Option<Stream> {
+    let key = DataKey::Stream(id);
+    if let Some(s) = env.storage().persistent().get::<DataKey, Stream>(&key) {
+        return Some(s);
+    }
+    env.storage().temporary().get(&key)
+}
+
+// Restored from cf48a49 (dropped by a merge).
+/// Store the beneficiary configuration for a split stream.
+pub fn set_split_beneficiaries(env: &Env, stream_id: u64, beneficiaries: &soroban_sdk::Vec<crate::types::SplitBeneficiary>) {
+    let key = DataKey::SplitBeneficiaries(stream_id);
+    env.storage().persistent().set(&key, beneficiaries);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
 }

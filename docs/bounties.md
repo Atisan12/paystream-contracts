@@ -6,6 +6,8 @@ The PayStream Bounty Program provides a structured framework for open-source con
 
 ---
 
+> **First time contributing?** Follow the [First Contribution Guide](first-contribution.md) before claiming a bounty.
+
 ## Bounty Criteria & Claiming Rules
 
 To claim any bounty in the PayStream repository, every submission must meet the following mandatory conditions:

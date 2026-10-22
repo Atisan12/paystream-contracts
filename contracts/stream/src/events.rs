@@ -49,6 +49,12 @@ pub fn stream_cancelled(
     );
 }
 
+/// Emitted by `archive_stream` when a closed stream is moved to temporary storage.
+pub fn stream_archived(env: &Env, stream_id: u64) {
+    env.events()
+        .publish((symbol_short!("archived"), stream_id), ());
+}
+
 pub fn topped_up(env: &Env, id: u64, employer: &Address, amount: i128) {
     env.events()
         .publish((symbol_short!("v1"), symbol_short!("topup"), id), (employer.clone(), amount));
@@ -184,4 +190,19 @@ pub fn platform_stats(
         (symbol_short!("v1"), symbol_short!("p_stats")),
         (timestamp, total_streams, total_deposit_locked, total_withdrawn, active_streams),
     );
+}
+
+/// Emitted once, the first time a stream is touched after its cliff (PROD-17).
+///
+/// Topics: `("v1", "cliff", stream_id)`; data: the cliff timestamp.
+pub fn cliff_reached(env: &Env, id: u64, cliff_time: u64) {
+    env.events()
+        .publish((symbol_short!("v1"), symbol_short!("cliff"), id), cliff_time);
+}
+
+// Restored from a97bb5d (dropped by a merge).
+/// Emitted when the admin changes the per-ledger stream creation cap (SEC-24).
+pub fn max_creates_per_ledger_updated(env: &Env, max: u32) {
+    env.events()
+        .publish((symbol_short!("v1"), symbol_short!("rl_upd"),), max);
 }
