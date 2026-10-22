@@ -42,6 +42,15 @@ deploy-local:
 deploy-testnet:
 	./scripts/deploy-testnet.sh
 
+# Export an employer's streams as CSV for payroll reconciliation.
+# Add JSON=1 to emit JSON instead of CSV, NETWORK=local to query another network.
+export-streams:
+	./scripts/export-streams.sh "$(CONTRACT_ID)" "$(EMPLOYER)" $(if $(NETWORK),--network $(NETWORK),) $(if $(JSON),--json,)
+
+# Apply .github/labels.yml to the repository (add --dry-run to preview).
+sync-labels:
+	./scripts/sync-labels.sh
+
 setup:
 	@echo "Setting up development environment..."
 	@echo "Checking for Rust installation..."

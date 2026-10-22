@@ -1,0 +1,72 @@
+# GitHub label definitions for veracindarella/paystream-contracts
+#
+# Format (one label per line):
+#
+#   <name>: ["<hex-colour>", "<description>"]
+#
+# This is the format used by `EndBug/add-and-commit` and is parsed by
+# `scripts/sync-labels.sh`, which applies the file to the repository through
+# the `gh` CLI. It is also directly consumable by the GitHub REST API
+# (`POST /repos/{owner}/{repo}/labels`).
+#
+# Rules for this file:
+#   - the name is the GitHub label name (case-insensitive, no spaces)
+#   - the colour is a 6-digit hex value, without the leading `#`
+#   - the description explains when the label applies, not what it is
+#
+# To apply the file to the repository:  ./scripts/sync-labels.sh
+# To check the file and the repository for drift: ./scripts/sync-labels.sh --check
+
+# --- Component ---------------------------------------------------------------
+smart-contract: ["0075ca", "Stream contract logic, storage layout, or state machine"]
+token-contract: ["f9d0c4", "SEP-41 token contract logic or token economics"]
+
+# --- Type of work ------------------------------------------------------------
+enhancement: ["a2eeef", "New feature or request"]
+bug: ["d73a4a", "Something isn't working"]
+documentation: ["cfd3d7", "Improvements or additions to documentation"]
+refactor: ["fef2c0", "Code restructuring with no behaviour change"]
+performance: ["ff9900", "Performance, resource usage, or gas optimisation work"]
+accessibility: ["f143ab", "Barrier affecting people with disabilities"]
+
+# --- Quality and security ----------------------------------------------------
+security: ["e11d48", "Security-sensitive work: auth, reentrancy, keys, audits"]
+testing: ["0e8a16", "Test suite, fixtures, fuzz targets, or test tooling"]
+devops: ["1d76db", "Build, release, deployment, or operational tooling"]
+ci-cd: ["ededed", "Continuous integration and delivery pipeline changes"]
+dependencies: ["0366d6", "Dependency bumps and lockfile updates"]
+github_actions: ["000000", "GitHub Actions workflow changes"]
+rust: ["000000", "Rust source and Cargo changes"]
+
+# --- Product -----------------------------------------------------------------
+product: ["5319e7", "Product-facing feature, workflow, or tool"]
+
+# --- Process -----------------------------------------------------------------
+good-first-issue: ["7057ff", "Good for newcomers — small and self-contained"]
+"good first issue": ["7057ff", "Good for newcomers — legacy alias of good-first-issue"]
+help wanted: ["008672", "Extra attention is needed from contributors"]
+question: ["d876e3", "Further information is requested from the reporter"]
+invalid: ["e4e669", "This issue or pull request is not valid"]
+duplicate: ["cfd3d7", "This issue or pull request already exists"]
+wontfix: ["ffffff", "This will not be worked on"]
+effort: ["bfd4f2", "Effort estimate label — see the small, medium, and large labels"]
+priority: ["c5def5", "Priority label — see the p0-critical through p3-low labels"]
+"Stellar Wave": ["5555ff", "Issues in the Stellar wave program"]
+
+# --- Effort ------------------------------------------------------------------
+small: ["bfd4f2", "Small effort — a few hours of work"]
+medium: ["e4e669", "Medium effort — up to a day of work"]
+large: ["0075ca", "Large effort — a week or more of work"]
+"medium-effort": ["006b75", "Medium effort — legacy alias of medium"]
+
+# --- Priority ----------------------------------------------------------------
+p0-critical: ["b60205", "Priority 0 — critical, blocks release"]
+p1-high: ["d93f0b", "Priority 1 — high, schedule for the current cycle"]
+p2-medium: ["e4e669", "Priority 2 — medium, schedule when capacity allows"]
+p3-low: ["c5def5", "Priority 3 — low, best effort"]
+critical: ["b60205", "Critical severity — legacy alias of p0-critical"]
+high: ["d93f0b", "High severity — legacy alias of p1-high"]
+low: ["c5def5", "Low severity — legacy alias of p3-low"]
+
+# --- Rewards -----------------------------------------------------------------
+bounty: ["fbca04", "Has an attached bounty or reward, see docs/bounties.md"]
