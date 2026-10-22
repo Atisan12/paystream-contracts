@@ -243,11 +243,20 @@ Employer creates a salary stream and deposits funds into the contract escrow.
 | `rate_per_second` | `i128` | Tokens streamed per second |
 | `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
 | `low_balance_threshold` | `Option<i128>` | Emit a `low_bal` event after any withdraw that leaves less than this remaining (`None`/0 = disabled) |
+| `cliff_time` | `Option<u64>` | Cliff timestamp (PROD-17). Nothing accrues before it; once passed, accrual runs from `cliff_time` (not from the start). `None`, or a cliff at/before now, means no cliff |
 
 **Returns:** `u64` — the new stream ID
 
+**Cliff behaviour:** `claimable` is 0 while `now < cliff_time`. Withdrawing,
+pausing/resuming or changing the rate before the cliff never moves accrual
+earlier than the cliff. Cancelling before the cliff refunds the full deposit to
+the employer. The first `withdraw` / `withdraw_all` / `cancel_stream` /
+`settle_stream` call at or after the cliff emits `cliff_reached` once. Read the
+cliff with `get_cliff_time(stream_id) -> Option<u64>`.
+
 **Errors:**
 - Panics if contract is paused
+- E035 if `cliff_time` > `stop_time` (when `stop_time` is non-zero)
 - E002 if `deposit` ≤ 0
 - E007 if `deposit` < minimum deposit
 - E001 if `rate_per_second` ≤ 0
@@ -346,6 +355,7 @@ Employer creates multiple salary streams atomically. All streams succeed or all 
 | `deposit` | `i128` | Gross deposit; any configured protocol fee is deducted before escrow |
 | `rate_per_second` | `i128` | Tokens per second for this stream |
 | `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
+| `cliff_time` | `Option<u64>` | Optional cliff (PROD-17); same rules as `create_stream`. Also stored in templates |
 
 **Returns:** `Vec<u64>` — list of new stream IDs in the same order as `params`
 
@@ -717,6 +727,33 @@ Before applying the new rate, any tokens accrued since the last withdrawal are s
 stellar contract invoke --id <STREAM_ID> --source <EMPLOYER_KEY> --network testnet \
   -- update_rate --employer <EMPLOYER_ADDRESS> --stream_id 1 --new_rate 20
 ```
+
+**Worked Example (numeric):**
+
+Initial state:
+- Stream created at time T=0 with deposit=10,000, rate=10 tokens/sec, no stop time
+- At T=0: withdrawn=0, pending_accrual=0
+
+Period 1 (rate A = 10/s):
+- Advance to T=100: 100 seconds elapsed at old rate
+- `claimable()` = 100 × 10 = 1,000 tokens
+
+Rate change:
+- Call `update_rate` at T=100 to set rate B = 20/s
+- Before applying new rate, accrued 1,000 tokens are banked into `pending_accrual`
+- After update: `pending_accrual` = 1,000, `rate_per_second` = 20, `last_withdraw_time` = 100
+
+Period 2 (rate B = 20/s):
+- Advance to T=150: 50 more seconds at new rate (20/s)
+- New accrual = 50 × 20 = 1,000 tokens
+- Total `claimable()` = `pending_accrual` + new accrual = 1,000 + 1,000 = 2,000
+
+Withdraw:
+- `withdraw()` at T=150 pays out 2,000 tokens total (covering both periods)
+- After withdraw: `withdrawn` = 2,000, `pending_accrual` = 0
+- Future accrual resumes from T=150 at 20/s
+
+*This matches `test_update_rate_withdraw_clears_pending_accrual`.*
 
 ---
 
@@ -1306,7 +1343,58 @@ stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
 
 ---
 
+## Stream Templates (PROD-20)
+
+Templates are saved per employer in persistent storage (TTL extended on every
+save and read). One employer can never read, use or delete another
+employer's template: lookups are keyed by `(employer, template_id)`.
+
+### `save_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth) |
+| `template_id` | `u32` | Employer-chosen identifier; saving again overwrites |
+| `params` | `StreamParams` | Token, deposit, rate, stop time and optional cliff. `employee` is ignored when creating from the template |
+
+### `create_stream_from_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth via `create_stream`) |
+| `employee` | `Address` | Recipient of the new stream |
+| `template_id` | `u32` | Template to use |
+
+**Returns:** `u64` — the new stream ID. Same validations as `create_stream`.
+
+**Errors:** E031 if `employer` has no template with this ID.
+
+### `delete_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth) |
+| `template_id` | `u32` | Template to delete |
+
+Removes the template and drops it from `list_templates`. Streams already
+created from it are unaffected. **Errors:** E031 if no such template exists for
+this employer.
+
+### `get_template` / `list_templates`
+
+`get_template(employer, template_id) -> Option<StreamParams>` and
+`list_templates(employer) -> Vec<(u32, StreamParams)>`. Read-only.
+
+---
+
 ## Token Contract
+
+The token implements the SEP-41 interface; see
+[sep41-compliance.md](sep41-compliance.md) for the full checklist, events and
+deviations. SEP-41 additions in this release: `decimals`, `name`, `symbol`,
+the admin-only write-once `set_metadata(admin, decimal, name, symbol)`, the
+`transfer` / `approve` / `burn` / `mint` events, and `transfer` taking a
+`MuxedAddress` recipient.
 
 ### `initialize`
 
@@ -1407,6 +1495,7 @@ Approve a spender to transfer tokens on behalf of the owner.
 **Returns:** nothing
 
 **Errors:**
+- Panics if `amount` is negative
 - Panics if `amount` > 0 and `expiration_ledger` is before the current ledger
 
 **Example:**
@@ -1428,7 +1517,9 @@ Return the allowance granted by `owner` to `spender`.
 | `owner` | `Address` | Token owner |
 | `spender` | `Address` | Approved spender |
 
-**Returns:** `(i128, u32)` — `(amount, expiration_ledger)`; `(0, 0)` if none
+**Returns:** `i128` — the remaining allowance; 0 if none or expired (SEP-41).
+Use `allowance_with_expiration(owner, spender) -> (i128, u32)` to also read the
+expiration ledger.
 
 **Example:**
 ```bash
@@ -1498,7 +1589,7 @@ stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
 
 ### `admin_nonce`
 
-Return the admin nonce that the next `mint` call must supply.
+Return the admin nonce that the next admin-gated call (`mint`, `mint_to_batch`, `propose_admin`, `pause_token`, `unpause_token`, `upgrade`) must supply. `get_admin_nonce` is an alias with identical behaviour.
 
 **Caller:** Anyone
 
@@ -1507,8 +1598,60 @@ Return the admin nonce that the next `mint` call must supply.
 **Example:**
 ```bash
 stellar contract invoke --id <TOKEN_ID> --source <ANY_KEY> --network testnet \
-  -- admin_nonce
+  -- get_admin_nonce
 ```
+
+---
+
+### `mint_to_batch`
+
+Admin mints tokens to up to 50 recipients in one call. A single admin nonce is consumed for the whole batch, and the batch is all-or-nothing. Emits one `mint` event per recipient.
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `nonce` | `u64` | Current admin nonce; consumed once |
+| `recipients` | `Vec<(Address, i128)>` | Recipient / amount pairs (each amount > 0) |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored admin nonce
+- T003 if more than 50 recipients are supplied
+- Panics if any amount ≤ 0
+- T001 if any balance or the total supply would overflow (whole batch reverts)
+
+---
+
+### `pause_token` / `unpause_token`
+
+Admin pauses or resumes all token movement. While paused, `transfer`, `transfer_from`, `burn` and `burn_from` panic with T002. Consumes the admin nonce and emits `token_paused` with data `true` (pause) or `false` (unpause).
+
+**Caller:** Admin
+
+| Parameter | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Must match the stored admin |
+| `nonce` | `u64` | Current admin nonce |
+
+**Returns:** nothing
+
+**Errors:**
+- Panics if caller is not the admin
+- Panics if `nonce` does not match the stored admin nonce
+
+**Example:**
+```bash
+stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
+  -- pause_token --admin <ADMIN_ADDRESS> --nonce 0
+```
+
+### `is_paused`
+
+Return whether the token is paused. **Caller:** Anyone. **Returns:** `bool`
 
 ---
 
@@ -1521,13 +1664,17 @@ Step 1 of two-step admin transfer: the current admin nominates a new admin.
 | Parameter | Type | Description |
 |---|---|---|
 | `new_admin` | `Address` | Address nominated as the next admin |
+| `nonce` | `u64` | Current admin nonce; consumed on success |
 
 **Returns:** nothing
+
+**Errors:**
+- Panics if `nonce` does not match the stored admin nonce
 
 **Example:**
 ```bash
 stellar contract invoke --id <TOKEN_ID> --source <ADMIN_KEY> --network testnet \
-  -- propose_admin --new_admin <NEW_ADMIN_ADDRESS>
+  -- propose_admin --new_admin <NEW_ADMIN_ADDRESS> --nonce 0
 ```
 
 ---
@@ -1588,6 +1735,9 @@ Burn tokens from the caller's own balance, reducing total supply.
 **Errors:**
 - Panics if `amount` ≤ 0
 - Panics if `from` has insufficient balance
+- T002 if the token is paused
+
+Emits `burn` with topics `("burn", from)` and data `amount`.
 
 **Example:**
 ```bash
@@ -1616,6 +1766,9 @@ Burn tokens on behalf of `from` using an existing allowance.
 - Panics if the allowance has expired
 - Panics if allowance is insufficient
 - Panics if `from` has insufficient balance
+- T002 if the token is paused
+
+Deducts `amount` from both `from`'s balance and `spender`'s allowance. Emits `burn` with topics `("burn", from)` and data `amount`.
 
 **Example:**
 ```bash
@@ -1628,6 +1781,17 @@ stellar contract invoke --id <TOKEN_ID> --source <SPENDER_KEY> --network testnet
 ## Events
 
 All events are emitted via `env.events().publish()`. The topic tuple is `(symbol, stream_id)` and the data tuple carries the payload described below.
+
+### `cliff_reached`
+
+Emitted once per stream, by the first `withdraw`, `withdraw_all`,
+`cancel_stream` or `settle_stream` call at or after the stream's cliff
+(PROD-17).
+
+**Topics:** `("v1", "cliff", stream_id)`
+**Data:** `cliff_time: u64`
+
+---
 
 ### `stream_cancelled`
 
@@ -1739,7 +1903,9 @@ Keep this table in sync with that file (see [CONTRIBUTING.md](../CONTRIBUTING.md
 | E009 | `ERR_BAD_NONCE` | Invalid admin nonce | `propose_admin`, `pause_contract`, `unpause_contract`, `set_min_deposit`, `set_protocol_fee`, `upgrade`, `propose_upgrade`, `execute_upgrade`, `cancel_upgrade` | Read the current value with `admin_nonce` and pass it as `nonce` |
 | E029 | `ERR_BATCH_TOO_LARGE` | Batch contains more than 50 streams | `create_streams_batch`, `cancel_streams_batch` | Split the operation into batches of at most 50 streams |
 | E030 | `ERR_INVALID_STOP_TIME` | Nonzero stop time precedes last withdrawal | `update_stop_time` | Use 0 or a timestamp at/after `last_withdraw_time` |
-| T001 | `ERR_OVERFLOW` (token) | Token arithmetic overflow | Token `mint`, `transfer`, `transfer_from` | Use smaller amounts |
+| T001 | `ERR_OVERFLOW` (token) | Token arithmetic overflow | Token `mint`, `mint_to_batch`, `transfer`, `transfer_from` | Use smaller amounts |
+| T002 | `ERR_PAUSED` (token) | Token is paused | Token `transfer`, `transfer_from`, `burn`, `burn_from` | Wait for the admin to call `unpause_token` |
+| T003 | `ERR_BATCH_TOO_LARGE` (token) | More than 50 recipients | Token `mint_to_batch` | Split into batches of at most 50 |
 
 ---
 

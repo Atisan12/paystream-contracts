@@ -2,6 +2,26 @@
 
 This document describes the structured event schema for PayStream smart contracts. Off-chain indexers can use this schema to parse Soroban events correctly and detect schema changes across contract upgrades.
 
+## Changelog
+
+Indexer-facing record of event schema changes. **Process:** any PR that adds, renames or removes an event, topic or data field must add an entry here (and bump the schema version for breaking changes).
+
+Each entry lists the event, the change (added field / renamed topic / removed field) and migration steps for indexers.
+
+### v1.0 (2026-09-27) — baseline
+
+| Event | Change | Migration |
+|-------|--------|-----------|
+| `init`, `created`, `withdraw`, `status`, `cancelled`, `topup`, `paused`, `rate_upd`, `stop_upd`, `near_exp`, `exp_unres`, `upg_prop`, `upg_exec`, `upg_cncl`, `at_set`, `at_up`, `thresh_up`, `split`, `p_stats` | Baseline: topic prefixed with `"v1"` | None. Match on `topic[0] == "v1"`, then `topic[1]` |
+| `receipt`, `archived`, `expired`, `xfr_strm`, `low_bal` | Baseline: emitted **without** a version prefix | Match on `topic[0]` directly. A future version will add the `"v1"` prefix and list it here |
+
+<!-- Template for new entries:
+### vX.Y (YYYY-MM-DD)
+| Event | Change | Migration |
+|-------|--------|-----------|
+| `name` | Added field `foo` (type) at data[n] | Treat missing `foo` as default for events before vX.Y |
+-->
+
 ## Schema Version
 
 Current schema version: **v1**
@@ -178,6 +198,27 @@ Emitted when a stream's rate_per_second is changed.
 {
   "topic": ["v1", "rate_upd", 1],
   "data": [1000000, 2000000]
+}
+```
+
+---
+
+### cliff_reached
+
+Emitted once per stream the first time it is touched (`withdraw`,
+`withdraw_all`, `cancel_stream`, `settle_stream`) at or after its cliff
+(PROD-17). Streams without a cliff never emit it.
+
+**Topic**: `["v1", "cliff", <stream_id>]`
+
+**Data**:
+- `cliff_time` (u64): The stream's cliff timestamp
+
+**Example**:
+```json
+{
+  "topic": ["v1", "cliff", 7],
+  "data": 1767225600
 }
 ```
 

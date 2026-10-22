@@ -1,9 +1,4 @@
-.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks export-streams sync-labels
-
-# Configuration for the export-streams target — override on the command line:
-#   make export-streams CONTRACT_ID=C... EMPLOYER=G...
-CONTRACT_ID ?= $(STREAM_CONTRACT_ID)
-EMPLOYER ?= $(EMPLOYER_ADDRESS)
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks create-stream
 .PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks stream-status
 
 build:
@@ -77,6 +72,8 @@ setup-hooks:
 	@echo "The hook will run 'cargo fmt --check' and 'cargo clippy' before each commit."
 	@echo "To skip the hook, use: git commit --no-verify"
 
+create-stream:
+	./scripts/create-stream-wizard.sh
 stream-status:
 	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(EMPLOYER)" ]; then \
 		echo "Usage: make stream-status CONTRACT_ID=<ID> EMPLOYER=<ADDRESS> [NETWORK=testnet]"; \
