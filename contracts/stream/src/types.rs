@@ -58,6 +58,8 @@ pub struct Stream {
     pub locked: bool,
     /// Remaining-deposit threshold for low-balance events; 0 disables them.
     pub low_balance_threshold: i128,
+    /// Optional reason for pausing the stream (regulatory compliance and dispute resolution).
+    pub pause_reason: Option<soroban_sdk::String>,
 }
 
 /// Vesting terms stored separately so existing persisted `Stream` values remain decodable.
@@ -294,7 +296,8 @@ pub const ERR_DRAIN_NOT_PAUSED: &str = "E026: contract must be paused before eme
 /// E027: no pending emergency drain proposal exists (SEC-03 / #32).
 pub const ERR_NO_PENDING_DRAIN: &str = "E027: no pending emergency drain proposal";
 /// E028: new_employer must differ from the stream's employee.
-pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str = "E028: new_employer must differ from the stream employee";
+pub const ERR_NEW_EMPLOYER_IS_EMPLOYEE: &str =
+    "E028: new_employer must differ from the stream employee";
 /// Error returned when a batch exceeds the maximum size.
 pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 streams";
 /// E030: caller does not hold the stream receipt.

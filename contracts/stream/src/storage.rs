@@ -102,17 +102,13 @@ pub fn set_pending_admin_nonce(env: &Env, nonce: u64) {
 
 /// Return the nonce bound to the pending administrator proposal.
 pub fn get_pending_admin_nonce(env: &Env) -> Option<u64> {
-    env.storage()
-        .instance()
-        .get(&DataKey::PendingAdminNonce)
+    env.storage().instance().get(&DataKey::PendingAdminNonce)
 }
 
 /// Clear the pending administrator and its associated nonce.
 pub fn clear_pending_admin(env: &Env) {
     env.storage().instance().remove(&DataKey::PendingAdmin);
-    env.storage()
-        .instance()
-        .remove(&DataKey::PendingAdminNonce);
+    env.storage().instance().remove(&DataKey::PendingAdminNonce);
 }
 
 /// Return the configured minimum deposit, or the default when unset.
@@ -269,10 +265,7 @@ pub fn linear_vest_claimable_amount(
     let remainder = (schedule.total_grant % vest_period) as u128;
     let fraction = (remainder * elapsed as u128 / schedule.vest_period as u128) as i128;
     let vested = whole.checked_add(fraction).expect(ERR_OVERFLOW);
-    let unwithdrawn_grant = vested
-        .checked_sub(stream.withdrawn)
-        .unwrap_or(0)
-        .max(0);
+    let unwithdrawn_grant = vested.checked_sub(stream.withdrawn).unwrap_or(0).max(0);
     let remaining = stream
         .deposit
         .checked_sub(stream.withdrawn)

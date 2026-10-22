@@ -92,7 +92,11 @@ fn test_initialize_emits_event() {
 
     // After initialize, exactly one event must have been emitted
     let events = env.events().all();
-    assert_eq!(events.events().len(), 1, "expected exactly one event from initialize");
+    assert_eq!(
+        events.events().len(),
+        1,
+        "expected exactly one event from initialize"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -130,18 +134,15 @@ fn test_linear_vest_mid_vest_claimable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 50);
     assert_eq!(client.claimable(&stream_id), 50_000);
-    assert_eq!(client.get_stream_type(&stream_id), crate::types::StreamType::LinearVest);
+    assert_eq!(
+        client.get_stream_type(&stream_id),
+        crate::types::StreamType::LinearVest
+    );
 }
 
 #[test]
@@ -153,14 +154,8 @@ fn test_linear_vest_fully_vested_claimable() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 100);
     assert_eq!(client.claimable(&stream_id), 100_000);
@@ -175,14 +170,8 @@ fn test_linear_vest_cliff_delays_claimability() {
     let token_id = setup_token(&env, &employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &100_000,
-        &100,
-        &Some(50),
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &100_000, &100, &Some(50));
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 49);
     assert_eq!(client.claimable(&stream_id), 0);
@@ -201,14 +190,8 @@ fn test_cancel_linear_vest_refunds_unvested_grant() {
     let employer_balance_before = token.balance(&employer);
 
     client.initialize(&admin);
-    let stream_id = client.create_linear_vest(
-        &employer,
-        &employee,
-        &token_id,
-        &10_000,
-        &100,
-        &None,
-    );
+    let stream_id =
+        client.create_linear_vest(&employer, &employee, &token_id, &10_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 40);
     client.cancel_stream(&employer, &stream_id, &None);
@@ -366,7 +349,7 @@ fn test_claimable_batch_mixed_statuses_preserves_order() {
         &None,&None,
     );
 
-    client.pause_stream(&employer, &paused_id);
+    client.pause_stream(&employer, &paused_id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&exhausted_employee, &exhausted_id);
     client.cancel_stream(&employer, &cancelled_id, &None);
@@ -449,7 +432,7 @@ fn test_pause_and_resume() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
@@ -547,7 +530,7 @@ fn test_pause_excludes_paused_time() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.resume_stream(&employer, &id);
     env.ledger().with_mut(|l| l.timestamp += 50);
@@ -568,12 +551,12 @@ fn test_multiple_pause_resume_cycles() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 30);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 200);
     client.resume_stream(&employer, &id);
 
     env.ledger().with_mut(|l| l.timestamp += 20);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 300);
     client.resume_stream(&employer, &id);
 
@@ -596,7 +579,7 @@ fn test_withdraw_during_pause_panics() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&employee, &id);
 }
@@ -977,7 +960,7 @@ fn test_update_rate_on_paused_stream() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     // Update rate while paused
     client.update_rate(&employer, &id, &20);
@@ -1130,7 +1113,10 @@ fn test_update_stop_time_extend_emits_event() {
             ]
             && <(u64, u64) as soroban_sdk::FromVal<Env, soroban_sdk::Val>>::from_val(&env, &data) == (old_stop_time, new_stop_time)
     });
-    assert!(update_event.is_some(), "stop_time_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "stop_time_updated event not emitted"
+    );
 }
 
 #[test]
@@ -1253,7 +1239,7 @@ fn test_update_stop_time_paused_stream_rejected() {
         &(now + 1_000),
         &None,&None,
     );
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     client.update_stop_time(&employer, &id, &(now + 2_000));
 }
@@ -1627,7 +1613,10 @@ fn test_stream_ids_by_employer_load_100() {
             StreamStatus::Active,
             "stream {id} should be Active"
         );
-        assert_eq!(s.employer, employer, "stream {id} should belong to employer");
+        assert_eq!(
+            s.employer, employer,
+            "stream {id} should belong to employer"
+        );
     }
 
     // --- Soroban limits documentation ---
@@ -1666,7 +1655,7 @@ fn test_cancel_stream_event_contains_amounts() {
     assert!(events.events().len() > 0, "cancelled event not emitted");
     // The cancel_stream call pays claimable=1_000 to employee, refund=9_000 to employer.
     let s = client.get_stream(&id);
-    let claimable = s.withdrawn;         // cancel_stream transfers claimable to employee
+    let claimable = s.withdrawn; // cancel_stream transfers claimable to employee
     let refund = s.deposit - s.withdrawn; // remainder is the refund
     assert_eq!(claimable, 1_000);
     assert_eq!(refund, 9_000);
@@ -1855,8 +1844,8 @@ fn test_withdraw_all_skips_cancelled_and_paused() {
     env.ledger().with_mut(|l| l.timestamp += 50);
 
     // Cancel stream 1, pause stream 2 — only stream 3 should be withdrawn
-    client.cancel_stream(&employer, &id1, &None);
-    client.pause_stream(&employer, &id2);
+    client.cancel_stream(&employer, &id1);
+    client.pause_stream(&employer, &id2, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
     let results = client.withdraw_all(&employee);
@@ -2292,8 +2281,14 @@ fn test_cancel_streams_batch_max_size_succeeds() {
     let ids = client.create_streams_batch(&employer, &params);
 
     client.cancel_streams_batch(&employer, &ids);
-    assert_eq!(client.get_stream(&ids.get(0).unwrap()).status, StreamStatus::Cancelled);
-    assert_eq!(client.get_stream(&ids.get(49).unwrap()).status, StreamStatus::Cancelled);
+    assert_eq!(
+        client.get_stream(&ids.get(0).unwrap()).status,
+        StreamStatus::Cancelled
+    );
+    assert_eq!(
+        client.get_stream(&ids.get(49).unwrap()).status,
+        StreamStatus::Cancelled
+    );
 }
 
 #[test]
@@ -2522,7 +2517,7 @@ fn test_cancel_streams_batch_includes_paused_stream() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(id);
@@ -2646,7 +2641,7 @@ fn test_pause_stream_batch_one_fails_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     // Pause id2 individually first so it is no longer Active
-    client.pause_stream(&employer, &id2);
+    client.pause_stream(&employer, &id2, &None);
 
     // Batch pause id1 (active) and id2 (paused) — id2 will fail and revert all
     let mut ids = soroban_sdk::Vec::new(&env);
@@ -2789,7 +2784,7 @@ fn test_resume_stream_batch_one_fails_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     // Pause only id1; id2 remains Active
-    client.pause_stream(&employer, &id1);
+    client.pause_stream(&employer, &id1, &None);
 
     // Batch resume id1 (Paused) and id2 (Active) — id2 will fail and revert all
     let mut ids = soroban_sdk::Vec::new(&env);
@@ -3214,7 +3209,7 @@ fn test_resume_stream_resets_last_withdraw_time() {
 
     // Advance to T=100 and pause.
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
 
     // Advance to T=200 and resume — last_withdraw_time must be reset to 200.
     env.ledger().with_mut(|l| l.timestamp += 100);
@@ -3424,7 +3419,10 @@ fn test_set_low_balance_threshold_success() {
             ]
             && <(i128, i128) as soroban_sdk::FromVal<Env, soroban_sdk::Val>>::from_val(&env, &data) == (0, 500)
     });
-    assert!(update_event.is_some(), "threshold_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "threshold_updated event not emitted"
+    );
 
     // Update again to 1200 (500 -> 1200)
     client.set_low_balance_threshold(&employer, &id, &1200);
@@ -3441,7 +3439,10 @@ fn test_set_low_balance_threshold_success() {
             ]
             && <(i128, i128) as soroban_sdk::FromVal<Env, soroban_sdk::Val>>::from_val(&env, &data) == (500, 1200)
     });
-    assert!(update_event2.is_some(), "second threshold_updated event not emitted");
+    assert!(
+        update_event2.is_some(),
+        "second threshold_updated event not emitted"
+    );
 }
 
 /// Setting threshold to 0 disables low-balance alerts and emits threshold_updated event.
@@ -3475,7 +3476,10 @@ fn test_set_low_balance_threshold_disable() {
             ]
             && <(i128, i128) as soroban_sdk::FromVal<Env, soroban_sdk::Val>>::from_val(&env, &data) == (1_000, 0)
     });
-    assert!(update_event.is_some(), "disable threshold_updated event not emitted");
+    assert!(
+        update_event.is_some(),
+        "disable threshold_updated event not emitted"
+    );
 }
 
 /// set_low_balance_threshold works on a paused stream.
@@ -3490,7 +3494,7 @@ fn test_set_low_balance_threshold_on_paused_stream() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
-    client.pause_stream(&employer, &id);
+    client.pause_stream(&employer, &id, &None);
     assert_eq!(client.get_stream(&id).status, StreamStatus::Paused);
 
     client.set_low_balance_threshold(&employer, &id, &750);
@@ -3696,8 +3700,7 @@ mod events {
         assert!(created.is_some(), "stream_created event not emitted");
 
         let (_, _, data) = created.unwrap();
-        let (ev_employer, ev_employee, ev_rate): (Address, Address, i128) =
-            data.into_val(&env);
+        let (ev_employer, ev_employee, ev_rate): (Address, Address, i128) = data.into_val(&env);
         assert_eq!(ev_employer, employer, "employer mismatch");
         assert_eq!(ev_employee, employee, "employee mismatch");
         assert_eq!(ev_rate, 10, "rate_per_second mismatch");
@@ -4040,14 +4043,16 @@ mod events {
         client.upgrade(&hash_clone, &1);
 
         let events = env.events().all();
-        let exec_ev = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
-            topics
-                == vec![
-                    &env,
-                    symbol_short!("v1").into_val(&env),
-                    symbol_short!("upg_exec").into_val(&env),
-                ]
-        });
+        let exec_ev = events
+            .iter()
+            .find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
+                topics
+                    == vec![
+                        &env,
+                        symbol_short!("v1").into_val(&env),
+                        symbol_short!("upg_exec").into_val(&env),
+                    ]
+            });
         assert!(exec_ev.is_some(), "upgrade_executed event not emitted");
 
         let (_, _, data) = exec_ev.unwrap();
@@ -4092,7 +4097,10 @@ fn test_auto_topup_fires_when_below_threshold() {
     // Stream balance should have been replenished
     let s = client.get_stream(&id);
     // deposit was 1_000, withdrew 600, then +500 auto top-up
-    assert_eq!(s.deposit, 1_500, "deposit should be 1_500 after auto top-up");
+    assert_eq!(
+        s.deposit, 1_500,
+        "deposit should be 1_500 after auto top-up"
+    );
 
     // auto_topped_up event must have been emitted
     let events = crate::test::all_events(&env);
@@ -4170,7 +4178,11 @@ fn test_auto_topup_skipped_when_cap_reached() {
         .collect::<std::vec::Vec<Val>>();
 
     // Only one auto_topped_up event should exist (the first withdraw)
-    assert_eq!(at_events.len(), 1, "expected exactly 1 auto_topped_up event");
+    assert_eq!(
+        at_events.len(),
+        1,
+        "expected exactly 1 auto_topped_up event"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4209,7 +4221,10 @@ fn test_auto_topup_skipped_when_stop_time_passed() {
 
     let s = client.get_stream(&id);
     // deposit unchanged at 10_000 (no auto top-up)
-    assert_eq!(s.deposit, 10_000, "deposit must not change when past stop_time");
+    assert_eq!(
+        s.deposit, 10_000,
+        "deposit must not change when past stop_time"
+    );
 
     let config = client.get_auto_topup_config(&id).unwrap();
     assert_eq!(config.total_topped_up, 0, "no top-up should have occurred");
@@ -4256,7 +4271,10 @@ fn test_auto_topup_skipped_when_allowance_insufficient() {
     env.ledger().with_mut(|l| l.timestamp += 60);
     // Withdraw must succeed even though auto-topup silently fails
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 600, "withdraw should succeed despite failed auto-topup");
+    assert_eq!(
+        withdrawn, 600,
+        "withdraw should succeed despite failed auto-topup"
+    );
 
     // deposit unchanged — auto-topup was skipped
     let s = client.get_stream(&id);
@@ -4336,14 +4354,24 @@ fn test_withdraw_after_rate_update_pays_pending_plus_new() {
     client.update_rate(&employer, &id, &20);
 
     let s = client.get_stream(&id);
-    assert_eq!(s.pending_accrual, 2_000, "pending_accrual must be 2_000 after update_rate");
+    assert_eq!(
+        s.pending_accrual, 2_000,
+        "pending_accrual must be 2_000 after update_rate"
+    );
 
     // 100 s at 20/s → 2_000 new accrual; total claimable = 2_000 + 2_000 = 4_000
     env.ledger().with_mut(|l| l.timestamp += 100);
-    assert_eq!(client.claimable(&id), 4_000, "claimable should include both portions");
+    assert_eq!(
+        client.claimable(&id),
+        4_000,
+        "claimable should include both portions"
+    );
 
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 4_000, "withdraw should transfer full pending + new accrual");
+    assert_eq!(
+        withdrawn, 4_000,
+        "withdraw should transfer full pending + new accrual"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4367,14 +4395,20 @@ fn test_pending_accrual_cleared_after_withdraw() {
 
     // Confirm pending_accrual was set
     let s_before = client.get_stream(&id);
-    assert!(s_before.pending_accrual > 0, "pending_accrual should be > 0 before withdraw");
+    assert!(
+        s_before.pending_accrual > 0,
+        "pending_accrual should be > 0 before withdraw"
+    );
 
     env.ledger().with_mut(|l| l.timestamp += 50);
     client.withdraw(&employee, &id);
 
     // After withdraw, pending_accrual must be 0
     let s_after = client.get_stream(&id);
-    assert_eq!(s_after.pending_accrual, 0, "pending_accrual must be 0 after withdraw");
+    assert_eq!(
+        s_after.pending_accrual, 0,
+        "pending_accrual must be 0 after withdraw"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4410,13 +4444,23 @@ fn test_multiple_rate_updates_accumulate_pending_accrual() {
 
     // Phase 3: 200 s at 5/s → 1_000 new accrual; total claimable = 2_000 + 1_000 = 3_000
     env.ledger().with_mut(|l| l.timestamp += 200);
-    assert_eq!(client.claimable(&id), 3_000, "claimable must sum all phases");
+    assert_eq!(
+        client.claimable(&id),
+        3_000,
+        "claimable must sum all phases"
+    );
 
     let withdrawn = client.withdraw(&employee, &id);
-    assert_eq!(withdrawn, 3_000, "withdraw must pay all accumulated accrual");
+    assert_eq!(
+        withdrawn, 3_000,
+        "withdraw must pay all accumulated accrual"
+    );
 
     let s_final = client.get_stream(&id);
-    assert_eq!(s_final.pending_accrual, 0, "pending_accrual cleared after withdraw");
+    assert_eq!(
+        s_final.pending_accrual, 0,
+        "pending_accrual cleared after withdraw"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -4463,8 +4507,14 @@ fn test_cancel_after_rate_update_pays_pending_accrual() {
 
     let (_, _, data) = cancelled.unwrap();
     let (claimable, refund): (i128, i128) = data.into_val(&env);
-    assert_eq!(claimable, 2_000, "claimable must include pending_accrual + new accrual");
-    assert_eq!(refund, 48_000, "refund = deposit(50_000) - claimable(2_000)");
+    assert_eq!(
+        claimable, 2_000,
+        "claimable must include pending_accrual + new accrual"
+    );
+    assert_eq!(
+        refund, 48_000,
+        "refund = deposit(50_000) - claimable(2_000)"
+    );
 }
 
 // ===========================================================================
@@ -4528,7 +4578,10 @@ fn test_withdraw_all_50_streams() {
     for i in 0..STREAM_COUNT {
         let stream_id = ids.get(i).unwrap();
         let s = client.get_stream(&stream_id);
-        assert_eq!(s.withdrawn, 100, "stream {stream_id}: withdrawn should be 100");
+        assert_eq!(
+            s.withdrawn, 100,
+            "stream {stream_id}: withdrawn should be 100"
+        );
         assert_eq!(
             s.pending_accrual, 0,
             "stream {stream_id}: pending_accrual should be 0"
@@ -4564,7 +4617,80 @@ fn test_withdraw_all_50_streams_within_budget() {
 
     // If CPU budget is exceeded the SDK panics, failing this test automatically
     let results = client.withdraw_all(&employee);
-    assert_eq!(results.len(), STREAM_COUNT, "all 50 streams must be processed");
+    assert_eq!(
+        results.len(),
+        STREAM_COUNT,
+        "all 50 streams must be processed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PROD-27: pause_reason field tests
+// ---------------------------------------------------------------------------
+
+/// Test pause_stream with a reason stores the pause_reason in the stream.
+#[test]
+fn test_pause_stream_with_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    let reason = soroban_sdk::String::from_slice(&env, "Employee on leave");
+    client.pause_stream(&employer, &id, &Some(reason.clone()));
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Paused);
+    assert_eq!(stream.pause_reason, Some(reason));
+}
+
+/// Test pause_stream with None reason stores None in the stream.
+#[test]
+fn test_pause_stream_without_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    client.pause_stream(&employer, &id, &None);
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Paused);
+    assert_eq!(stream.pause_reason, None);
+}
+
+/// Test resume_stream clears the pause_reason when resuming.
+#[test]
+fn test_resume_stream_clears_pause_reason() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let employer = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let token_id = setup_token(&env, &employer);
+
+    client.initialize(&admin);
+    let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None);
+
+    let reason = soroban_sdk::String::from_slice(&env, "Temporary suspension");
+    client.pause_stream(&employer, &id, &Some(reason));
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.pause_reason, Some(reason));
+
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    client.resume_stream(&employer, &id);
+
+    let stream = client.get_stream(&id);
+    assert_eq!(stream.status, StreamStatus::Active);
+    assert_eq!(stream.pause_reason, None);
 }
 
 // ---------------------------------------------------------------------------
