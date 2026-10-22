@@ -5,7 +5,7 @@ use soroban_sdk::{symbol_short, Address, Env};
 
 pub fn contract_initialized(env: &Env, admin: &Address) {
     env.events()
-        .publish((symbol_short!("v1"), symbol_short!("init"),), admin.clone());
+        .publish((symbol_short!("v1"), symbol_short!("init")), admin.clone());
 }
 
 pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address, rate: i128) {
@@ -16,8 +16,10 @@ pub fn stream_created(env: &Env, id: u64, employer: &Address, employee: &Address
 }
 
 pub fn withdrawn(env: &Env, id: u64, employee: &Address, amount: i128) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("withdraw"), id), (employee.clone(), amount));
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("withdraw"), id),
+        (employee.clone(), amount),
+    );
 }
 
 /// Emitted when a stream receipt changes hands (PROD-01).
@@ -27,8 +29,10 @@ pub fn receipt_transferred(env: &Env, id: u64, from: &Address, to: &Address) {
 }
 
 pub fn stream_status_changed(env: &Env, id: u64, status: &StreamStatus) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("status"), id), status.clone());
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("status"), id),
+        status.clone(),
+    );
 }
 
 /// Emitted when a stream is cancelled, recording the exact cash-flow split.
@@ -49,12 +53,15 @@ pub fn stream_archived(env: &Env, stream_id: u64) {
 }
 
 pub fn topped_up(env: &Env, id: u64, employer: &Address, amount: i128) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("topup"), id), (employer.clone(), amount));
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("topup"), id),
+        (employer.clone(), amount),
+    );
 }
 
 pub fn contract_paused(env: &Env, paused: bool) {
-    env.events().publish((symbol_short!("v1"), symbol_short!("paused"),), paused);
+    env.events()
+        .publish((symbol_short!("v1"), symbol_short!("paused")), paused);
 }
 
 /// Emitted when `update_rate` changes the stream's `rate_per_second`.
@@ -82,40 +89,47 @@ pub fn stream_expired(env: &Env, stream_id: u64) {
 /// Emitted by `check_stream_expiry` when an Active stream's `stop_time` is
 /// approaching (within 24 hours / 86400 seconds). No state is changed.
 pub fn stream_near_expiry(env: &Env, stream_id: u64, seconds_remaining: i128) {
-    env.events()
-        .publish(
-            (symbol_short!("v1"), symbol_short!("near_exp")),
-            (stream_id, seconds_remaining),
-        );
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("near_exp")),
+        (stream_id, seconds_remaining),
+    );
 }
 
 /// Emitted by `check_stream_expiry` when an Active stream has passed its
 /// `stop_time` and remains unresolved (not yet settled or cancelled). No
 /// state is changed.
 pub fn stream_expired_unresolved(env: &Env, stream_id: u64, stop_time: u64) {
-    env.events()
-        .publish(
-            (symbol_short!("v1"), symbol_short!("exp_unres")),
-            (stream_id, stop_time),
-        );
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("exp_unres")),
+        (stream_id, stop_time),
+    );
 }
 
 pub fn upgrade_proposed(env: &Env, wasm_hash: &soroban_sdk::BytesN<32>, unlock_time: u64) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("upg_prop"),), (wasm_hash.clone(), unlock_time));
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("upg_prop")),
+        (wasm_hash.clone(), unlock_time),
+    );
 }
 
 pub fn upgrade_executed(env: &Env, wasm_hash: &soroban_sdk::BytesN<32>) {
-    env.events()
-        .publish((symbol_short!("v1"), symbol_short!("upg_exec"),), wasm_hash.clone());
+    env.events().publish(
+        (symbol_short!("v1"), symbol_short!("upg_exec")),
+        wasm_hash.clone(),
+    );
 }
 
 pub fn upgrade_cancelled(env: &Env) {
     env.events()
-        .publish((symbol_short!("v1"), symbol_short!("upg_cncl"),), ());
+        .publish((symbol_short!("v1"), symbol_short!("upg_cncl")), ());
 }
 
-pub fn stream_transferred(env: &Env, stream_id: u64, old_employer: &Address, new_employer: &Address) {
+pub fn stream_transferred(
+    env: &Env,
+    stream_id: u64,
+    old_employer: &Address,
+    new_employer: &Address,
+) {
     env.events().publish(
         (symbol_short!("xfr_strm"), stream_id),
         (old_employer.clone(), new_employer.clone()),
@@ -181,7 +195,13 @@ pub fn platform_stats(
 ) {
     env.events().publish(
         (symbol_short!("v1"), symbol_short!("p_stats")),
-        (timestamp, total_streams, total_deposit_locked, total_withdrawn, active_streams),
+        (
+            timestamp,
+            total_streams,
+            total_deposit_locked,
+            total_withdrawn,
+            active_streams,
+        ),
     );
 }
 

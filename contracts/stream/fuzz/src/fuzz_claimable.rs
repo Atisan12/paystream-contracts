@@ -33,6 +33,7 @@ fn make_stream(
         pending_accrual: 0,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     }
 }
 

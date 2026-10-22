@@ -52,6 +52,7 @@ fn make_stream(
         pending_accrual: 0,
         locked: false,
         low_balance_threshold: 0,
+        pause_reason: None,
     }
 }
 
@@ -156,6 +157,7 @@ proptest! {
                 pending_accrual: 0,
                 locked: false,
                 low_balance_threshold: 0,
+                pause_reason: None,
             }
         };
         prop_assert_eq!(claimable_amount(&stream, now), 0,
