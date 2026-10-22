@@ -2,10 +2,9 @@
 
 #![cfg(test)]
 
-use crate::types::TokenDataKey;
-use crate::{TokenContract, TokenContractClient, TOKEN_CONTRACT_VERSION, TTL_EXTEND_TO};
-use soroban_sdk::testutils::{storage::Persistent as _, Address as _, Ledger};
-use soroban_sdk::{Address, Env};
+use crate::{TokenContract, TokenContractClient};
+use soroban_sdk::testutils::{Address as _, Ledger};
+use soroban_sdk::{vec, Address, Env, Vec};
 
 fn setup() -> (Env, TokenContractClient<'static>) {
     let env = Env::default();
@@ -114,9 +113,9 @@ fn test_admin_transfer_flow() {
     let new_admin = Address::generate(&env);
     let user = Address::generate(&env);
     client.initialize(&admin, &1_000);
-    client.propose_admin(&new_admin);
+    client.propose_admin(&new_admin, &0);
     client.accept_admin(&new_admin);
-    client.mint(&new_admin, &user, &10, &0);
+    client.mint(&new_admin, &user, &10, &1);
     assert_eq!(client.balance(&user), 10);
 }
 
@@ -126,7 +125,7 @@ fn test_accept_admin_wrong_address() {
     let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin, &1_000);
-    client.propose_admin(&Address::generate(&env));
+    client.propose_admin(&Address::generate(&env), &0);
     client.accept_admin(&Address::generate(&env));
 }
 
@@ -486,4 +485,170 @@ fn test_upgrade_preserves_balances_and_supply() {
     assert_eq!(client.balance(&user), 250);
     assert_eq!(client.admin_nonce(), 3);
     assert_eq!(client.version(), TOKEN_CONTRACT_VERSION);
+}
+
+// --- TOK-11: burn_from ---
+
+#[test]
+#[should_panic(expected = "insufficient balance")]
+fn test_burn_from_insufficient_balance() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.transfer(&admin, &user, &100);
+    client.approve(&user, &spender, &500, &100);
+    client.burn_from(&spender, &user, &200);
+}
+
+#[test]
+fn test_burn_from_reduces_allowance() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.transfer(&admin, &user, &500);
+    client.approve(&user, &spender, &300, &100);
+    client.burn_from(&spender, &user, &200);
+    assert_eq!(client.allowance(&user, &spender), (100, 100));
+}
+
+// --- TOK-12: admin nonce ---
+
+#[test]
+fn test_propose_admin_consumes_nonce() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    assert_eq!(client.get_admin_nonce(), 0);
+    client.propose_admin(&Address::generate(&env), &0);
+    assert_eq!(client.get_admin_nonce(), 1);
+}
+
+#[test]
+#[should_panic(expected = "invalid nonce")]
+fn test_propose_admin_stale_nonce_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.propose_admin(&Address::generate(&env), &0);
+    client.propose_admin(&Address::generate(&env), &0);
+}
+
+// --- TOK-13: pause / unpause ---
+
+#[test]
+#[should_panic(expected = "T002: token is paused")]
+fn test_transfer_while_paused_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.pause_token(&admin, &0);
+    client.transfer(&admin, &Address::generate(&env), &10);
+}
+
+#[test]
+#[should_panic(expected = "T002: token is paused")]
+fn test_transfer_from_while_paused_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.approve(&admin, &spender, &100, &100);
+    client.pause_token(&admin, &0);
+    client.transfer_from(&spender, &admin, &Address::generate(&env), &10);
+}
+
+#[test]
+#[should_panic(expected = "T002: token is paused")]
+fn test_burn_while_paused_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.pause_token(&admin, &0);
+    client.burn(&admin, &10);
+}
+
+#[test]
+#[should_panic(expected = "T002: token is paused")]
+fn test_burn_from_while_paused_panics() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let spender = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.approve(&admin, &spender, &100, &100);
+    client.pause_token(&admin, &0);
+    client.burn_from(&spender, &admin, &10);
+}
+
+#[test]
+fn test_unpause_restores_transfers() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.pause_token(&admin, &0);
+    assert!(client.is_paused());
+    client.unpause_token(&admin, &1);
+    assert!(!client.is_paused());
+    assert_eq!(client.get_admin_nonce(), 2);
+    client.transfer(&admin, &user, &10);
+    assert_eq!(client.balance(&user), 10);
+}
+
+#[test]
+#[should_panic(expected = "not admin")]
+fn test_pause_non_admin_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.pause_token(&Address::generate(&env), &0);
+}
+
+// --- TOK-14: mint_to_batch ---
+
+#[test]
+fn test_mint_to_batch_success() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    client.mint_to_batch(&admin, &0, &vec![&env, (a.clone(), 100), (b.clone(), 250)]);
+    assert_eq!(client.balance(&a), 100);
+    assert_eq!(client.balance(&b), 250);
+    assert_eq!(client.total_supply(), 1_350);
+    assert_eq!(client.admin_nonce(), 1);
+}
+
+#[test]
+#[should_panic(expected = "T001: token arithmetic overflow")]
+fn test_mint_to_batch_overflow_reverts() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &(i128::MAX - 10));
+    client.mint_to_batch(
+        &admin,
+        &0,
+        &vec![
+            &env,
+            (Address::generate(&env), 5),
+            (Address::generate(&env), 10),
+        ],
+    );
+}
+
+#[test]
+#[should_panic(expected = "T003: batch too large")]
+fn test_mint_to_batch_cap_exceeded() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &1_000);
+    let mut recipients: Vec<(Address, i128)> = Vec::new(&env);
+    for _ in 0..51 {
+        recipients.push_back((Address::generate(&env), 1));
+    }
+    client.mint_to_batch(&admin, &0, &recipients);
 }

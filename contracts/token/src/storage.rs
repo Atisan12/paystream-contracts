@@ -130,40 +130,13 @@ pub fn consume_admin_nonce(env: &Env, nonce: u64) {
         .set(&TokenDataKey::AdminNonce, &(current + 1));
 }
 
-pub fn max_supply(env: &Env) -> i128 {
+pub fn is_paused(env: &Env) -> bool {
     env.storage()
         .instance()
-        .get(&TokenDataKey::MaxSupply)
-        .unwrap_or(0)
+        .get(&TokenDataKey::Paused)
+        .unwrap_or(false)
 }
 
-pub fn set_max_supply(env: &Env, max: i128) {
-    env.storage().instance().set(&TokenDataKey::MaxSupply, &max);
-}
-
-pub fn version(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&TokenDataKey::Version)
-        .unwrap_or(0)
-}
-
-pub fn set_version(env: &Env, version: u32) {
-    env.storage().instance().set(&TokenDataKey::Version, &version);
-}
-
-pub fn get_pending_upgrade(env: &Env) -> Option<PendingUpgrade> {
-    env.storage().instance().get(&TokenDataKey::PendingUpgrade)
-}
-
-pub fn set_pending_upgrade(env: &Env, pending: &PendingUpgrade) {
-    env.storage()
-        .instance()
-        .set(&TokenDataKey::PendingUpgrade, pending);
-}
-
-pub fn clear_pending_upgrade(env: &Env) {
-    env.storage()
-        .instance()
-        .remove(&TokenDataKey::PendingUpgrade);
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&TokenDataKey::Paused, &paused);
 }

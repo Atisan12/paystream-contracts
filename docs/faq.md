@@ -53,3 +53,20 @@ All error codes are listed in [Error Codes](api-reference.md#error-codes). Panic
 
 **14. Why does `withdraw` fail with E017?**
 Withdrawals are only allowed on Active (or Exhausted) streams. Paused and Cancelled streams reject withdrawals.
+
+## Operational questions
+
+**15. A stream passed its `stop_time`. What should operators do?**
+Accrual stops at `stop_time`, but the stream stays `Active` until the employee withdraws the remainder. Call [`check_stream_expiry`](api-reference.md#check_stream_expiry) to emit monitoring events. Once the 7-day grace period has passed and `claimable` is 0, the admin can mark the stream `Exhausted` with [`expire_streams`](api-reference.md#expire_streams). Streams that still have a claimable balance are skipped, so expiry never takes earned funds. Commands: [runbook § Expire stale streams](operations-runbook.md#3-expire-stale-streams).
+
+**16. How do we rotate the admin key?**
+Use the two-step transfer: `propose_admin` from the current key, then `accept_admin` from the new key, each with the current nonce. Check `admin_nonce` before each call. If the old key may be compromised, pause the contract first, rotate, then unpause from the new key. See [runbook § Admin transfer](operations-runbook.md#4-admin-transfer) and [FAQ 11](#admin-operations).
+
+**17. The contract is paused. How do we recover?**
+Pausing changes no stream state. Accrual is time-based, so employees are not shortchanged: what they earn while the contract is paused becomes withdrawable after `unpause_contract`. Find the cause, confirm the fix, then unpause with the current nonce. See [runbook § Pause / unpause](operations-runbook.md#2-pause--unpause-the-contract).
+
+**18. An upgrade failed or went wrong. How do we recover?**
+If `execute_upgrade` reverts, the old WASM keeps running and no state changes. Fix the cause (wrong nonce, timelock not elapsed, wrong hash) and try again. If a bad WASM was installed, propose and execute a corrected or previous WASM hash through the same timelocked flow; pause the contract in the meantime if users are at risk. Stream storage is kept across upgrades. See [upgrade guide](upgrade-guide.md) and [runbook § Contract upgrade](operations-runbook.md#5-contract-upgrade).
+
+**19. Does changing `min_deposit` affect existing streams?**
+No. [`set_min_deposit`](api-reference.md#set_min_deposit) is only checked when a stream is created. Existing streams, top-ups and withdrawals are unaffected. See [runbook § Set minimum deposit](operations-runbook.md#3-set-minimum-deposit).
