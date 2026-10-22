@@ -122,6 +122,44 @@ jobs:
           done
           exit $status
 
+      - name: Check contract interface diff
+        run: |
+          WASM=target/wasm32-unknown-unknown/release/paystream_stream.wasm
+          BASELINE=contracts/stream/interface.json
+          GENERATED=$(mktemp)
+
+          if [ ! -f "$WASM" ]; then
+            echo "::error::Compiled WASM not found at $WASM"
+            exit 1
+          fi
+          if [ ! -f "$BASELINE" ]; then
+            echo "::error::Committed interface spec not found at $BASELINE"
+            exit 1
+          fi
+
+          stellar contract bindings json --wasm "$WASM" --output "$GENERATED"
+
+          if ! diff -u "$BASELINE" "$GENERATED"; then
+            {
+              echo "### ❌ Contract interface changed"
+              echo ""
+              echo "The public interface of the stream contract differs from the committed"
+              echo "baseline at \`$BASELINE\`. This is a breaking change for clients."
+              echo ""
+              echo "If the change is intentional, regenerate the baseline and commit it:"
+              echo ""
+              echo '```'
+              echo "stellar contract bindings json --wasm $WASM --output $BASELINE"
+              echo '```'
+              echo ""
+              echo "See CONTRIBUTING.md for details."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error file=$BASELINE::Contract interface changed; see diff above and CONTRIBUTING.md"
+            exit 1
+          fi
+
+          echo "Contract interface matches committed baseline."
+
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v7
         with:

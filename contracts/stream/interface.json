@@ -1,0 +1,6 @@
+{
+  "_comment": "Baseline interface spec for the stream contract. Regenerate with scripts/check-interface.sh --update after intentional public interface changes.",
+  "contract": "stream",
+  "functions": [],
+  "events": []
+}
