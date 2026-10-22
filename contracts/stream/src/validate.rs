@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![deny(missing_docs)]
+
 use crate::types::{
-    ERR_AMOUNT_NOT_POSITIVE, ERR_BELOW_MIN_DEPOSIT, ERR_INVALID_RATE, ERR_STOP_TIME_PAST,
-    ERR_STOP_TIME_TOO_FAR, ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, MAX_STOP_TIME_OFFSET,
+    ERR_AMOUNT_NOT_POSITIVE, ERR_BELOW_MIN_DEPOSIT, ERR_CLIFF_AFTER_STOP, ERR_INVALID_RATE, ERR_STOP_TIME_PAST,
+    ERR_ZERO_DEPOSIT, ERR_ZERO_RATE, ERR_STOP_TIME_TOO_FAR, MAX_STOP_TIME_OFFSET,
 };
 use soroban_sdk::Address;
 
@@ -49,6 +51,18 @@ pub fn validate_create_stream(
     assert!(employer != employee, "employer and employee must differ");
 }
 
+/// Validate an optional cliff against the stream's stop time (PROD-17).
+///
+/// # Panics
+/// - E032 if `stop_time` is non-zero and `cliff_time > stop_time`
+pub fn validate_cliff(cliff_time: Option<u64>, stop_time: u64) {
+    if let Some(cliff) = cliff_time {
+        if stop_time > 0 {
+            assert!(cliff <= stop_time, "{}", ERR_CLIFF_AFTER_STOP);
+        }
+    }
+}
+
 /// Validate a top-up amount.
 pub fn validate_top_up(amount: i128) {
     assert!(amount > 0, "{}", ERR_AMOUNT_NOT_POSITIVE);
@@ -79,12 +93,8 @@ pub fn validate_split_beneficiaries(
 
     let count = beneficiaries.len();
     assert!(count >= 2, "{}", ERR_SPLIT_TOO_FEW);
-    assert!(
-        count <= MAX_SPLIT_BENEFICIARIES as usize,
-        "{}",
-        ERR_SPLIT_TOO_MANY
-    );
-
+    assert!(count <= MAX_SPLIT_BENEFICIARIES, "{}", ERR_SPLIT_TOO_MANY);
+    
     let mut total_bp: u64 = 0;
     for benef in beneficiaries.iter() {
         total_bp += benef.basis_points as u64;

@@ -88,6 +88,10 @@ pub struct StreamParams {
     pub rate_per_second: i128,
     /// Hard stop timestamp, or 0 for no hard stop.
     pub stop_time: u64,
+    /// Optional cliff timestamp (PROD-17). No tokens accrue before it; accrual
+    /// starts from `cliff_time` once passed. Must be <= `stop_time` when both
+    /// are set.
+    pub cliff_time: Option<u64>,
 }
 
 /// Single beneficiary in a split stream, with their share in basis points.
@@ -95,8 +99,10 @@ pub struct StreamParams {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct SplitBeneficiary {
+    /// Beneficiary that receives this share of every withdrawal.
     pub address: Address,
-    pub basis_points: u32, // 0-10000, where 10000 = 100%
+    /// Share in basis points: 0–10000, where 10000 = 100%.
+    pub basis_points: u32,
 }
 
 /// Configuration for recurring stream auto top-up.
@@ -125,7 +131,9 @@ pub struct AutoTopupConfig {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PendingUpgrade {
+    /// Hash of the uploaded WASM the contract will upgrade to.
     pub wasm_hash: soroban_sdk::BytesN<32>,
+    /// Earliest ledger timestamp at which `execute_upgrade` may run.
     pub unlock_time: u64,
 }
 
@@ -175,6 +183,31 @@ pub enum DataKey {
     TemplateIds(Address),
     /// Saved stream templates: (employer address, template ID) → StreamParams.
     Template(Address, u32),
+    /// Cliff timestamp for a stream (PROD-17): stream ID → u64. Stored apart
+    /// from `Stream` so existing persisted streams stay decodable.
+    StreamCliff(u64),
+    /// Set once the `cliff_reached` event has been emitted for a stream.
+    CliffReached(u64),
+    /// Non-payroll stream type. Missing keys represent legacy Payroll streams.
+    StreamType(u64),
+    /// Linear vesting terms for a stream.
+    LinearVestSchedule(u64),
+    /// Pending WASM upgrade proposal (SEC-02).
+    PendingUpgrade,
+    /// Timestamp at which a stream entered a terminal (Cancelled/Exhausted) state,
+    /// used to enforce the 30-day archive waiting period.
+    StreamEndedAt(u64),
+    /// Admin-configurable maximum streams an employer may create per ledger.
+    /// Default: 50. Stored in instance storage.
+    MaxCreatesPerLedger,
+    /// Number of streams created by this employer in the current ledger.
+    /// Temporary storage — expires automatically.
+    CreateCountThisLedger(Address),
+    /// Ledger sequence number when the employer last created a stream.
+    /// Temporary storage — expires automatically.
+    LastCreateLedger(Address),
+    /// Split stream beneficiaries: stream ID → Vec<SplitBeneficiary> for multi-recipient streams (PROD-22).
+    SplitBeneficiaries(u64),
 }
 
 /// Contract error codes – panic messages reference these names so callers can
@@ -271,6 +304,9 @@ pub const ERR_BATCH_TOO_LARGE: &str = "E029: batch exceeds the maximum of 50 str
 pub const ERR_NOT_RECEIPT_OWNER: &str = "E030: caller does not hold the stream receipt";
 /// E031: template not found.
 pub const ERR_TEMPLATE_NOT_FOUND: &str = "E031: template not found";
+/// E035: `cliff_time` is after `stop_time` (PROD-17).
+pub const ERR_CLIFF_AFTER_STOP: &str = "E035: cliff_time must be <= stop_time";
+/// Maximum number of streams in one batch call (create/cancel/pause/resume).
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// E030: stop_time extends beyond 10-year limit from now
@@ -278,3 +314,62 @@ pub const ERR_STOP_TIME_TOO_FAR: &str = "E030: stop_time must not exceed 10 year
 
 /// Maximum stop_time window: 10 years in seconds (315,360,000 seconds)
 pub const MAX_STOP_TIME_OFFSET: u64 = 315_360_000;
+
+// Restored from a97bb5d (dropped by a merge).
+/// E030: per-employer, per-ledger stream creation rate limit exceeded.
+pub const ERR_RATE_LIMIT_EXCEEDED: &str = "E030: stream creation rate limit exceeded for this ledger";
+
+// Restored from a97bb5d (dropped by a merge).
+/// Default maximum number of streams an employer may create in a single ledger.
+pub const DEFAULT_MAX_CREATES_PER_LEDGER: u32 = 50;
+
+// Restored from cf48a49 (dropped by a merge).
+/// E030: split beneficiary basis points must sum to 10000 (100%)
+pub const ERR_SPLIT_BASIS_INVALID: &str = "E030: split beneficiary basis points must sum to 10000";
+
+// Restored from cf48a49 (dropped by a merge).
+/// E031: split stream must have at least 2 beneficiaries
+pub const ERR_SPLIT_TOO_FEW: &str = "E031: split stream must have at least 2 beneficiaries";
+
+// Restored from cf48a49 (dropped by a merge).
+/// E032: split stream cannot have more than 20 beneficiaries
+pub const ERR_SPLIT_TOO_MANY: &str = "E032: split stream cannot have more than 20 beneficiaries";
+
+// Restored from cf48a49 (dropped by a merge).
+/// Maximum number of beneficiaries in a split stream.
+pub const MAX_SPLIT_BENEFICIARIES: u32 = 20;
+
+// Restored from c3cb54c (dropped by a merge).
+/// `update_stop_time` would move the stop time before the last withdrawal.
+pub const ERR_INVALID_STOP_TIME: &str = "E030: stop_time precedes last_withdraw_time";
+
+// Restored from a74e8f6 (dropped by a merge).
+/// `execute_upgrade` was called before the timelock expired.
+pub const ERR_UPGRADE_TIMELOCK_ACTIVE: &str = "E034: upgrade timelock has not yet expired";
+
+// Restored from ce6fe77 (dropped by a merge).
+/// `archive_stream` was called on a stream that is still Active or Paused.
+pub const ERR_STREAM_NOT_ENDED: &str = "E030: stream is not cancelled or exhausted";
+
+// Restored from a74e8f6 (dropped by a merge).
+/// No auto top-up is configured for the stream.
+pub const ERR_NO_AUTO_TOPUP: &str = "E031: no auto top-up configured for this stream";
+
+// Restored from a74e8f6 (dropped by a merge).
+/// Auto top-up threshold, amount or cap is not positive / consistent.
+pub const ERR_INVALID_AUTO_TOPUP: &str = "E030: invalid auto top-up parameters";
+
+// Restored from ce6fe77 (dropped by a merge).
+/// `archive_stream` was called before `ARCHIVE_WAIT_PERIOD` elapsed.
+pub const ERR_ARCHIVE_TOO_EARLY: &str = "E031: archive waiting period has not elapsed";
+
+// Restored from 24db2de (dropped by a merge).
+/// Protocol fee configuration. Absent configuration means fees are disabled.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProtocolFeeConfig {
+    /// Protocol fee in basis points.
+    pub fee_bps: u32,
+    /// Address that receives protocol fees.
+    pub treasury: Address,
+}

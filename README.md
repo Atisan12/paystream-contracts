@@ -92,7 +92,9 @@ See the [glossary](docs/glossary.md) for terms and the [client guide](docs/clien
 │   ├── build.sh
 │   ├── deploy-local.sh
 │   ├── deploy-testnet.sh
-│   └── init-testnet.sh
+│   ├── export-streams.sh     # CSV/JSON export of an employer's streams
+│   ├── init-testnet.sh
+│   └── sync-labels.sh        # Apply .github/labels.yml to the repository
 ├── Cargo.toml
 ├── Makefile
 ├── CONTRIBUTING.md
@@ -219,6 +221,7 @@ Time is capped at `stop_time` if set. Paused time is excluded. See the [worked e
 - [API Reference](docs/api-reference.md)
 - [FAQ](docs/faq.md) — common integrator questions
 - [Operations Runbook](docs/operations-runbook.md) — admin procedures (nonce, pause, min deposit, admin transfer, upgrade)
+- [Migration Guide v0.1 → v0.2](docs/migration/v0.1-to-v0.2.md) — breaking changes, new error codes, and event schema changes
 
 ---
 
@@ -323,14 +326,16 @@ We welcome contributions from the community.
 - **Developer Setup & Guidelines**: Review [CONTRIBUTING.md](CONTRIBUTING.md) for environment setup, coding standards, and PR workflows.
 - **Bounty Program**: PayStream maintains an active bounty track for open-source contributors across smart contracts, testing, security, and tooling. See [docs/bounties.md](docs/bounties.md) for open bounties, criteria, and entry-level tasks tagged with `good-first-issue`.
 - **First-Time Contributors**: Browse open beginner-friendly tasks in the [Good First Issues Tracker](https://github.com/veracindarella/paystream-contracts/issues?q=is%3Aissue+is%3Aopen+label%3Agood-first-issue).
-- **Questions & Community**: Ask questions, share ideas, and show what you've built in [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions).
+- **Questions & Community**: Ask questions, share ideas, and show what you've built in [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions) — categories: [Q&A](https://github.com/veracindarella/paystream-contracts/discussions/categories/q-a), [Ideas](https://github.com/veracindarella/paystream-contracts/discussions/categories/ideas), [Integrations](https://github.com/veracindarella/paystream-contracts/discussions/categories/integrations), [Show and Tell](https://github.com/veracindarella/paystream-contracts/discussions/categories/show-and-tell), [Announcements](https://github.com/veracindarella/paystream-contracts/discussions/categories/announcements).
 - **Roadmap**: See [docs/roadmap.md](docs/roadmap.md) for planned milestones through mainnet launch.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the full security policy and vulnerability reporting.
+See [SECURITY.md](SECURITY.md) for the full security policy, vulnerability reporting channels,
+and the responsible disclosure rewards programme.
 To rotate the admin keypair, follow the [key rotation runbook](docs/security/key-rotation.md).
-Report vulnerabilities to `security@paystream.example` — not via public issues.
+Report vulnerabilities through a [private GitHub security advisory](https://github.com/veracindarella/paystream-contracts/security/advisories/new)
+(or `security@paystream.example` — see [SEC-32 / #270](https://github.com/veracindarella/paystream-contracts/issues/270)) — not via public issues.
 
 ## License
 

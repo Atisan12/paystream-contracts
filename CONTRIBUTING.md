@@ -17,6 +17,7 @@ Thank you for contributing to PayStream — a Soroban smart contract system for 
 - [Commit Conventions](#commit-conventions)
 - [Bounty Program & Finding Issues](#bounty-program--finding-issues)
   - [Finding your first issue](#finding-your-first-issue)
+- [Claiming a Bounty](#claiming-a-bounty)
 - [Questions & Discussions](#questions--discussions)
 - [Pull Request Process](#pull-request-process)
 - [Changelog](#changelog)
@@ -339,11 +340,48 @@ Looking for tasks to contribute to?
 3. Stuck? Ping a maintainer in [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions) — every good first issue has a mentor available.
 4. Keep the PR small and reference the issue with `Closes #<number>`.
 
+New to Rust, Soroban or open source? Start with the step-by-step [First Contribution Guide](docs/first-contribution.md).
+
+---
+
+## Claiming a Bounty
+
+PayStream bounties are paid out only after a PR is merged into `main`. Follow these steps to claim a bounty:
+
+### Step 1: Comment on the issue
+Leave a comment on the issue saying you plan to work on it. This signals intent and prevents duplicated effort. See [docs/bounties.md](docs/bounties.md) for the active bounty table and open tasks.
+
+### Step 2: Get assignment confirmation
+Wait for a maintainer to confirm your assignment on the issue. Work on one active issue at a time. If someone else has already been assigned, pick a different issue.
+
+### Step 3: Implement
+Create a feature branch from `main` and implement the change following the [Coding Standards](#coding-standards). Add unit tests for any new contract function and update affected documentation.
+
+### Step 4: Open a PR referencing the issue
+Open a pull request against `veracindarella/paystream-contracts:main`. Reference the issue in the PR description using `Closes #<number>`. Keep the PR focused on a single concern.
+
+### Step 5: Wait for merge
+Address review feedback promptly. Once the PR is approved and merged, the bounty acceptance criteria are fulfilled.
+
+### FAQ
+
+**What if someone else starts the same issue?**
+Only one contributor is assigned per issue. Comment first and wait for assignment confirmation before writing code. If another contributor is already assigned, their work takes precedence — choose a different issue to avoid duplicate effort.
+
+**What counts as completion?**
+A bounty is complete when the PR is merged into `main` and all acceptance criteria are met: tests pass, lint and formatting are clean, and documentation (including `docs/bounties.md`) reflects the change. Simply opening a PR is not enough — the merge is the trigger for fulfillment.
+
+For bounty categories, effort tiers, and the full bounty table, see [docs/bounties.md](docs/bounties.md).
+
 ---
 
 ## Questions & Discussions
 
-- **Questions, ideas, and show-and-tell** → [GitHub Discussions](https://github.com/veracindarella/paystream-contracts/discussions) (categories: Q&A, Ideas, Show and Tell, Announcements). Start with the pinned "Welcome & FAQ" thread.
+- **Q&A** → [GitHub Discussions: Q&A](https://github.com/veracindarella/paystream-contracts/discussions/categories/q-a) — integrator questions and troubleshooting
+- **Ideas** → [GitHub Discussions: Ideas](https://github.com/veracindarella/paystream-contracts/discussions/categories/ideas) — feature ideas and product suggestions
+- **Integrations** → [GitHub Discussions: Integrations](https://github.com/veracindarella/paystream-contracts/discussions/categories/integrations) — third-party integrations and client libraries
+- **Show and Tell** → [GitHub Discussions: Show and Tell](https://github.com/veracindarella/paystream-contracts/discussions/categories/show-and-tell) — share what you've built with PayStream
+- **Announcements** → [GitHub Discussions: Announcements](https://github.com/veracindarella/paystream-contracts/discussions/categories/announcements) — releases and project updates (read-only for members)
 - **Bugs and concrete feature requests** → [GitHub Issues](https://github.com/veracindarella/paystream-contracts/issues).
 - **Security vulnerabilities** → follow [SECURITY.md](SECURITY.md); never open a public issue.
 

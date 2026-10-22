@@ -1,3 +1,4 @@
+.PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks create-stream
 .PHONY: build test integration-test fmt fmt-check lint deny clean deploy-local deploy-testnet setup setup-hooks stream-status
 
 build:
@@ -41,6 +42,15 @@ deploy-local:
 deploy-testnet:
 	./scripts/deploy-testnet.sh
 
+# Export an employer's streams as CSV for payroll reconciliation.
+# Add JSON=1 to emit JSON instead of CSV, NETWORK=local to query another network.
+export-streams:
+	./scripts/export-streams.sh "$(CONTRACT_ID)" "$(EMPLOYER)" $(if $(NETWORK),--network $(NETWORK),) $(if $(JSON),--json,)
+
+# Apply .github/labels.yml to the repository (add --dry-run to preview).
+sync-labels:
+	./scripts/sync-labels.sh
+
 setup:
 	@echo "Setting up development environment..."
 	@echo "Checking for Rust installation..."
@@ -62,6 +72,8 @@ setup-hooks:
 	@echo "The hook will run 'cargo fmt --check' and 'cargo clippy' before each commit."
 	@echo "To skip the hook, use: git commit --no-verify"
 
+create-stream:
+	./scripts/create-stream-wizard.sh
 stream-status:
 	@if [ -z "$(CONTRACT_ID)" ] || [ -z "$(EMPLOYER)" ]; then \
 		echo "Usage: make stream-status CONTRACT_ID=<ID> EMPLOYER=<ADDRESS> [NETWORK=testnet]"; \
