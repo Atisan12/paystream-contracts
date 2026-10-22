@@ -4,6 +4,7 @@ members = [
     "contracts/stream",
     "contracts/token",
     "contracts/stream/fuzz",
+    "contracts/token/fuzz",
 ]
 
 [workspace.package]

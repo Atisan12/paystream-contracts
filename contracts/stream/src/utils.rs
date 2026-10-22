@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use soroban_sdk::{Address, Env};
+#![deny(missing_docs)]
+
+use soroban_sdk::{Address, Bytes, Env};
 
 /// Get the native XLM SAC (Stellar Asset Contract) address.
 ///
@@ -20,10 +22,12 @@ use soroban_sdk::{Address, Env};
 /// let token_client = token::Client::new(&env, &native_xlm);
 /// ```
 pub fn get_native_xlm_sac(env: &Env) -> Address {
-    Address::from_contract_id(
-        env,
-        &soroban_sdk::token::StellarAssetClient::native(env).contract_id(),
-    )
+    // XDR of `Asset::Native` is the 4-byte discriminant 0. The SAC address is
+    // derived deterministically from it and the network passphrase.
+    let native_asset_xdr = Bytes::from_array(env, &[0u8, 0, 0, 0]);
+    env.deployer()
+        .with_stellar_asset(native_asset_xdr)
+        .deployed_address()
 }
 
 #[cfg(test)]
