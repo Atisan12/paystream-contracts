@@ -22,7 +22,7 @@ pub mod validate;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
 
 /// Compile-time contract version.  Increment this constant with every
 /// WASM upgrade so that `migrate` stamps the new version into instance
@@ -1389,12 +1389,13 @@ impl StreamContract {
     /// # Parameters
     /// - `employer` — must match the stream's employer (requires auth)
     /// - `stream_id` — ID of the stream to cancel
+    /// - `cancel_reason` — optional reason symbol recorded on-chain for auditing
     ///
     /// # Errors
     /// - Panics if stream not found
     /// - Panics if caller is not the stream's employer
     /// - Panics if stream is already Cancelled or Exhausted
-    pub fn cancel_stream(env: Env, employer: Address, stream_id: u64) {
+    pub fn cancel_stream(env: Env, employer: Address, stream_id: u64, cancel_reason: Option<Symbol>) {
         employer.require_auth();
         let mut stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
         assert_eq!(stream.employer, employer, "{}", ERR_NOT_EMPLOYER);
@@ -2374,6 +2375,49 @@ impl StreamContract {
         get_paused(&env)
     }
 
+    /// Return whether a stream has expired and is eligible for cleanup.
+    ///
+    /// A stream is considered expired when ALL of the following hold:
+    /// - `stop_time > 0` (stream has a hard stop)
+    /// - `now >= stop_time + GRACE_PERIOD` (grace period has elapsed)
+    /// - `claimable == 0` (no tokens remain for the employee to claim)
+    ///
+    /// Returns `false` for streams with no `stop_time`, streams that still
+    /// have remaining claimable tokens, or streams in Paused/Cancelled status
+    /// (they may have pending accrual). No auth required.
+    ///
+    /// # Parameters
+    /// - `stream_id` — ID of the stream to query
+    ///
+    /// # Returns
+    /// `true` if the stream is expired and clean, `false` otherwise.
+    ///
+    /// # Errors
+    /// - Panics if stream not found (E015)
+    pub fn is_stream_expired(env: Env, stream_id: u64) -> bool {
+        let stream = load_stream(&env, stream_id).expect(ERR_STREAM_NOT_FOUND);
+
+        // No hard stop means the stream never expires this way.
+        if stream.stop_time == 0 {
+            return false;
+        }
+
+        // Paused and Cancelled streams are excluded: they may have claimable accrual.
+        if stream.status == StreamStatus::Paused || stream.status == StreamStatus::Cancelled {
+            return false;
+        }
+
+        let now = env.ledger().timestamp();
+
+        // Grace period must have elapsed since stop_time.
+        if now < stream.stop_time.saturating_add(GRACE_PERIOD) {
+            return false;
+        }
+
+        // Any remaining claimable amount means the stream is not yet expired.
+        let claimable = stream_claimable_amount(&env, &stream, now);
+        claimable == 0
+    }
     /// Return the current contract admin address.
     ///
     /// Off-chain tools use this to discover the admin without decoding raw

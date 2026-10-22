@@ -92,6 +92,7 @@ proptest! {
             &initial_deposit,
             &rate,
             &0,
+            &None,
         );
 
         let mut current_status = StreamStatus::Active;
@@ -143,7 +144,7 @@ proptest! {
                     if current_status == StreamStatus::Active
                         || current_status == StreamStatus::Paused
                     {
-                        client.top_up(&employer, &stream_id, &amount);
+                        client.top_up(&employer, &stream_id, &amount, &None);
                         current_deposit += amount;
                     }
                 }
@@ -151,7 +152,7 @@ proptest! {
                     if current_status == StreamStatus::Active
                         || current_status == StreamStatus::Paused
                     {
-                        client.cancel_stream(&employer, &stream_id);
+                        client.cancel_stream(&employer, &stream_id, &None);
                         current_status = StreamStatus::Cancelled;
                         is_terminal = true;
                     }
@@ -227,7 +228,7 @@ proptest! {
         client.initialize(&admin);
         client.set_min_deposit(&admin, &0, &100);
 
-        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0);
+        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0, &None);
 
         for delta in time_deltas {
             let s = client.get_stream(&stream_id);
@@ -272,7 +273,7 @@ proptest! {
         client.initialize(&admin);
         client.set_min_deposit(&admin, &0, &100);
 
-        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0);
+        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0, &None);
 
         for delta in time_deltas {
             env.ledger().with_mut(|l| l.timestamp += delta);
@@ -307,10 +308,10 @@ proptest! {
         client.initialize(&admin);
         client.set_min_deposit(&admin, &0, &100);
 
-        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0);
+        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0, &None);
 
         env.ledger().with_mut(|l| l.timestamp += time_delta);
-        client.cancel_stream(&employer, &stream_id);
+        client.cancel_stream(&employer, &stream_id, &None);
 
         // Stream must be Cancelled.
         let s = client.get_stream(&stream_id);
@@ -345,7 +346,7 @@ proptest! {
         client.initialize(&admin);
         client.set_min_deposit(&admin, &0, &100);
 
-        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0);
+        let stream_id = client.create_stream(&employer, &employee, &token_id, &deposit, &rate, &0, &None);
 
         for _ in 0..cycles {
             // Active → Paused

@@ -194,7 +194,7 @@ fn test_cancel_linear_vest_refunds_unvested_grant() {
         client.create_linear_vest(&employer, &employee, &token_id, &10_000, &100, &None);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 40);
-    client.cancel_stream(&employer, &stream_id);
+    client.cancel_stream(&employer, &stream_id, &None);
 
     assert_eq!(token.balance(&employee), 4_000);
     assert_eq!(token.balance(&employer), employer_balance_before - 4_000);
@@ -352,7 +352,7 @@ fn test_claimable_batch_mixed_statuses_preserves_order() {
     client.pause_stream(&employer, &paused_id, &None);
     env.ledger().with_mut(|l| l.timestamp += 100);
     client.withdraw(&exhausted_employee, &exhausted_id);
-    client.cancel_stream(&employer, &cancelled_id);
+    client.cancel_stream(&employer, &cancelled_id, &None);
 
     let mut ids = soroban_sdk::Vec::new(&env);
     ids.push_back(cancelled_id);
@@ -453,7 +453,7 @@ fn test_cancel_stream_refunds_employer() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     let s = client.get_stream(&id);
     assert_eq!(s.status, StreamStatus::Cancelled);
@@ -482,7 +482,7 @@ fn test_cancel_stream_enriched_event() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Find the "cancelled" event in the emitted events list
     // SDK v28: use events().len() to verify at least one event, then check stream state
@@ -1647,7 +1647,7 @@ fn test_cancel_stream_event_contains_amounts() {
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     env.ledger().with_mut(|l| l.timestamp += 100);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Verify the cancelled event was emitted (at least one event exists)
     // and the stream state reflects the correct split (SDK v28: no .iter() on ContractEvents)
@@ -1678,7 +1678,7 @@ fn test_cancel_stream_paused_zero_claimable_full_refund_event() {
     client.set_min_deposit(&admin, &0, &100);
     let id = client.create_stream(&employer, &employee, &token_id, &5_000, &10, &0, &None, &None);
     client.pause_stream(&employer, &id);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // Verify stream state (SDK v28: no .iter() on ContractEvents)
     let events = env.events().all();
@@ -2554,7 +2554,7 @@ fn test_cancel_streams_batch_partial_failure_reverts_all() {
     let id2 = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
     // Cancel id2 individually first
-    client.cancel_stream(&employer, &id2);
+    client.cancel_stream(&employer, &id2, &None);
 
     // Now try batch cancel with id1 (active) and id2 (already cancelled)
     // → must panic because id2 is already ended
@@ -3531,7 +3531,7 @@ fn test_set_low_balance_threshold_cancelled_stream_rejected() {
     client.initialize(&admin);
     let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
 
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
     assert_eq!(client.get_stream(&id).status, StreamStatus::Cancelled);
 
     client.set_low_balance_threshold(&employer, &id, &500);
@@ -3819,7 +3819,7 @@ mod events {
         // deposit=10_000, rate=10/s; after 100s claimable=1_000, refund=9_000
         let id = client.create_stream(&employer, &employee, &token_id, &10_000, &10, &0, &None, &None);
         env.ledger().with_mut(|l| l.timestamp += 100);
-        client.cancel_stream(&employer, &id);
+        client.cancel_stream(&employer, &id, &None);
 
         let events = crate::test::all_events(&env);
         let cancelled = events.iter().find(|(_, topics, _): &(_, SdkVec<Val>, Val)| {
@@ -4490,7 +4490,7 @@ fn test_cancel_after_rate_update_pays_pending_accrual() {
 
     // 50 s at 20/s → new accrual = 1_000; total claimable = 1_000 + 1_000 = 2_000
     env.ledger().with_mut(|l| l.timestamp += 50);
-    client.cancel_stream(&employer, &id);
+    client.cancel_stream(&employer, &id, &None);
 
     // The cancelled event's claimable_amount should include both portions
     let events = crate::test::all_events(&env);
