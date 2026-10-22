@@ -94,3 +94,14 @@ pub fn consume_admin_nonce(env: &Env, nonce: u64) {
         .instance()
         .set(&TokenDataKey::AdminNonce, &(current + 1));
 }
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&TokenDataKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&TokenDataKey::Paused, &paused);
+}
