@@ -2,6 +2,8 @@
 
 #![cfg(test)]
 
+extern crate std;
+
 use crate::{TokenContract, TokenContractClient};
 use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{vec, Address, Env, Vec};

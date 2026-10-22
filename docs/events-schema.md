@@ -203,6 +203,27 @@ Emitted when a stream's rate_per_second is changed.
 
 ---
 
+### cliff_reached
+
+Emitted once per stream the first time it is touched (`withdraw`,
+`withdraw_all`, `cancel_stream`, `settle_stream`) at or after its cliff
+(PROD-17). Streams without a cliff never emit it.
+
+**Topic**: `["v1", "cliff", <stream_id>]`
+
+**Data**:
+- `cliff_time` (u64): The stream's cliff timestamp
+
+**Example**:
+```json
+{
+  "topic": ["v1", "cliff", 7],
+  "data": 1767225600
+}
+```
+
+---
+
 ### upgrade_proposed
 
 Emitted when a contract upgrade is proposed.

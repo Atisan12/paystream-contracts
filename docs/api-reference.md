@@ -243,11 +243,20 @@ Employer creates a salary stream and deposits funds into the contract escrow.
 | `rate_per_second` | `i128` | Tokens streamed per second |
 | `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
 | `low_balance_threshold` | `Option<i128>` | Emit a `low_bal` event after any withdraw that leaves less than this remaining (`None`/0 = disabled) |
+| `cliff_time` | `Option<u64>` | Cliff timestamp (PROD-17). Nothing accrues before it; once passed, accrual runs from `cliff_time` (not from the start). `None`, or a cliff at/before now, means no cliff |
 
 **Returns:** `u64` — the new stream ID
 
+**Cliff behaviour:** `claimable` is 0 while `now < cliff_time`. Withdrawing,
+pausing/resuming or changing the rate before the cliff never moves accrual
+earlier than the cliff. Cancelling before the cliff refunds the full deposit to
+the employer. The first `withdraw` / `withdraw_all` / `cancel_stream` /
+`settle_stream` call at or after the cliff emits `cliff_reached` once. Read the
+cliff with `get_cliff_time(stream_id) -> Option<u64>`.
+
 **Errors:**
 - Panics if contract is paused
+- E035 if `cliff_time` > `stop_time` (when `stop_time` is non-zero)
 - E002 if `deposit` ≤ 0
 - E007 if `deposit` < minimum deposit
 - E001 if `rate_per_second` ≤ 0
@@ -346,6 +355,7 @@ Employer creates multiple salary streams atomically. All streams succeed or all 
 | `deposit` | `i128` | Gross deposit; any configured protocol fee is deducted before escrow |
 | `rate_per_second` | `i128` | Tokens per second for this stream |
 | `stop_time` | `u64` | Hard stop timestamp (0 = indefinite) |
+| `cliff_time` | `Option<u64>` | Optional cliff (PROD-17); same rules as `create_stream`. Also stored in templates |
 
 **Returns:** `Vec<u64>` — list of new stream IDs in the same order as `params`
 
@@ -1306,7 +1316,58 @@ stellar contract invoke --id <STREAM_ID> --source <ANY_KEY> --network testnet \
 
 ---
 
+## Stream Templates (PROD-20)
+
+Templates are saved per employer in persistent storage (TTL extended on every
+save and read). One employer can never read, use or delete another
+employer's template: lookups are keyed by `(employer, template_id)`.
+
+### `save_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth) |
+| `template_id` | `u32` | Employer-chosen identifier; saving again overwrites |
+| `params` | `StreamParams` | Token, deposit, rate, stop time and optional cliff. `employee` is ignored when creating from the template |
+
+### `create_stream_from_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth via `create_stream`) |
+| `employee` | `Address` | Recipient of the new stream |
+| `template_id` | `u32` | Template to use |
+
+**Returns:** `u64` — the new stream ID. Same validations as `create_stream`.
+
+**Errors:** E031 if `employer` has no template with this ID.
+
+### `delete_template`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `employer` | `Address` | Template owner (requires auth) |
+| `template_id` | `u32` | Template to delete |
+
+Removes the template and drops it from `list_templates`. Streams already
+created from it are unaffected. **Errors:** E031 if no such template exists for
+this employer.
+
+### `get_template` / `list_templates`
+
+`get_template(employer, template_id) -> Option<StreamParams>` and
+`list_templates(employer) -> Vec<(u32, StreamParams)>`. Read-only.
+
+---
+
 ## Token Contract
+
+The token implements the SEP-41 interface; see
+[sep41-compliance.md](sep41-compliance.md) for the full checklist, events and
+deviations. SEP-41 additions in this release: `decimals`, `name`, `symbol`,
+the admin-only write-once `set_metadata(admin, decimal, name, symbol)`, the
+`transfer` / `approve` / `burn` / `mint` events, and `transfer` taking a
+`MuxedAddress` recipient.
 
 ### `initialize`
 
@@ -1407,6 +1468,7 @@ Approve a spender to transfer tokens on behalf of the owner.
 **Returns:** nothing
 
 **Errors:**
+- Panics if `amount` is negative
 - Panics if `amount` > 0 and `expiration_ledger` is before the current ledger
 
 **Example:**
@@ -1428,7 +1490,9 @@ Return the allowance granted by `owner` to `spender`.
 | `owner` | `Address` | Token owner |
 | `spender` | `Address` | Approved spender |
 
-**Returns:** `(i128, u32)` — `(amount, expiration_ledger)`; `(0, 0)` if none
+**Returns:** `i128` — the remaining allowance; 0 if none or expired (SEP-41).
+Use `allowance_with_expiration(owner, spender) -> (i128, u32)` to also read the
+expiration ledger.
 
 **Example:**
 ```bash
@@ -1690,6 +1754,17 @@ stellar contract invoke --id <TOKEN_ID> --source <SPENDER_KEY> --network testnet
 ## Events
 
 All events are emitted via `env.events().publish()`. The topic tuple is `(symbol, stream_id)` and the data tuple carries the payload described below.
+
+### `cliff_reached`
+
+Emitted once per stream, by the first `withdraw`, `withdraw_all`,
+`cancel_stream` or `settle_stream` call at or after the stream's cliff
+(PROD-17).
+
+**Topics:** `("v1", "cliff", stream_id)`
+**Data:** `cliff_time: u64`
+
+---
 
 ### `stream_cancelled`
 
